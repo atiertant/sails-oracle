@@ -9,7 +9,7 @@ A [Waterline](https://github.com/balderdashy/waterline) adapter for Oracle Datab
 Install is through NPM.
 
 ```bash
-$ npm install sails-oracle //TODO
+$ npm install sails-oracledb
 ```
 
 ## Configuration

@@ -1,6 +1,6 @@
 {
-  "name": "sails-oracle",
-  "version": "0.0.3",
+  "name": "sails-oracledb",
+  "version": "0.0.1",
   "description": "Oracle Database adapter for Sails.js",
   "main": "index.js",
   "repository": {
@@ -22,7 +22,7 @@
   "readmeFilename": "README.md",
   "dependencies": {
   },
-  "readme": "![image_squidhome@2x.png](http://i.imgur.com/RIvu9.png) \n\n# Oracle Adapter for Sails Application.\n",
+  "readme": "![image_squidhome@2x.png](http://i.imgur.com/RIvu9.png) \n\n# Oracle Database Adapter for Sails Application.\n",
   "bugs": {
     "url": "https://github.com/atiertant/sails-oracle/issues"
   }
