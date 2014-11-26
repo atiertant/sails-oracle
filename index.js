@@ -11,10 +11,11 @@ var async = require('async'),
         Query = require('./lib/query'),
         utils = require('./utils');
 _.str = require('underscore.string');
-var Sequel = require('waterline-oracle-sequel');
+var Sequel = require('waterline-sequel');
 var Processor = require('./lib/processor');
 var Cursor = require('waterline-cursor');
 var hop = utils.object.hasOwnProperty;
+var SqlString = require('./lib/SqlString');
 //var Errors = require('waterline-errors').adapter;
 
 module.exports = (function() {
@@ -30,7 +31,10 @@ module.exports = (function() {
         escapeCharacter: '',
         casting: false,
         canReturnValues: false,
-        escapeInserts: false
+        escapeInserts: false,
+		declareDeleteAlias: false,
+		explicitTableAs: false,
+		prefixAlias: 'alias__'
     };
 
     var adapter = {
@@ -176,7 +180,7 @@ module.exports = (function() {
                 if (!collection) {
                     return cb(util.format('Unknown collection `%s` in connection `%s`', collectionName, connectionName));
                 }
-                // var tableName = mysql.escapeId(collectionName);
+                // var tableName = SqlString.escapeId(collectionName);
                 var tableName = collectionName;
                 // Iterate through each attribute, building a query string
 
@@ -269,7 +273,7 @@ module.exports = (function() {
                 if (!collection) {
                     return cb(util.format('Unknown collection `%s` in connection `%s`', collectionName, connectionName));
                 }
-                //var tableName = mysql.escapeId(collectionName);
+                //var tableName = SqlString.escapeId(collectionName);
                 var tableName = collectionName;
                 //tableName = 'ARTICLESOCIETE';
                 var columnsListQuery = "select COLUMN_NAME, DATA_TYPE, NULLABLE from USER_TAB_COLUMNS where TABLE_NAME = '" + tableName.toUpperCase() + "'";
@@ -871,7 +875,6 @@ module.exports = (function() {
                 // Build query
                 var schema = collection.waterline.schema;
                 var _query;
-                sqlOptions.declareDeleteAlias = false;
                 var sequel = new Sequel(schema, sqlOptions);
 
                 // Build a query for the specific query strategy

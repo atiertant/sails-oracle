@@ -3,7 +3,7 @@
  */
 
 // Dependencies
-var mysql = require('mysql');
+var SqlString = require('./lib/SqlString');
 var _ = require('lodash');
 var url = require('url');
 
@@ -67,7 +67,7 @@ utils.prepareValue = function(value) {
     value = utils.toSqlDate(value);
   }
 
-  return mysql.escape(value);
+  return SqlString.escape(value);
 };
 
 /**
@@ -202,20 +202,20 @@ utils.buildSelectStatement = function(criteria, table, schemaDefs) {
     // If this is a belongs_to relationship, keep the foreign key name from the AS part
     // of the query. This will result in a selected column like: "user"."id" AS "user_id__id"
     if(select.model) {
-      return query += mysql.escapeId(alias) + '.' + mysql.escapeId(select.key) + ' AS ' +
-                      mysql.escapeId(select.parentKey + '__' + select.key) + ', ';
+      return query += SqlString.escapeId(alias) + '.' + SqlString.escapeId(select.key) + ' AS ' +
+                      SqlString.escapeId(select.parentKey + '__' + select.key) + ', ';
     }
 
     // If a junctionTable is used, the child value should be used in the AS part of the
     // select query.
     if(select.junctionTable) {
-      return query += mysql.escapeId(alias) + '.' + mysql.escapeId(select.key) + ' AS ' +
-                      mysql.escapeId(select.alias + '__' + select.key) + ', ';
+      return query += SqlString.escapeId(alias) + '.' + SqlString.escapeId(select.key) + ' AS ' +
+                      SqlString.escapeId(select.alias + '__' + select.key) + ', ';
     }
 
     // Else if a hasMany attribute is being selected, use the alias plus the child
-    return query += mysql.escapeId(alias) + '.' + mysql.escapeId(select.key) + ' AS ' +
-                    mysql.escapeId(select.alias + '__' + select.key) + ', ';
+    return query += SqlString.escapeId(alias) + '.' + SqlString.escapeId(select.key) + ' AS ' +
+                    SqlString.escapeId(select.alias + '__' + select.key) + ', ';
   });
 
   // Remove the last comma
