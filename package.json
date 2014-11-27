@@ -1,8 +1,11 @@
 {
   "name": "sails-oracledb",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "description": "Oracle Database adapter for Sails.js",
   "main": "index.js",
+  "scripts": {
+    "test": "make test"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/atiertant/sails-oracle.git"
@@ -21,6 +24,26 @@
   "license": "MIT",
   "readmeFilename": "README.md",
   "dependencies": {
+    "oracle": "0.3.7",
+    "async": "~0.9.0",
+    "lodash": "~2.4.1",
+    "underscore": "~1.4.3",
+    "underscore.string": "~2.3.1",
+    "waterline-errors": "~0.10.0",
+    "waterline-sequel": "git://github.com/atiertant/waterline-sequel#master",
+    "waterline-cursor": "~0.0.5"
+  },
+  "devDependencies": {
+    "mocha": "~1.13.0",
+    "waterline-adapter-tests": "~0.10.0",
+    "captains-log": "~0.11.5"
+  },
+  "waterlineAdapter": {
+    "waterlineVersion": "~0.10.0",
+    "interfaces": [
+      "semantic",
+      "queryable"
+    ]
   },
   "readme": "![image_squidhome@2x.png](http://i.imgur.com/RIvu9.png) \n\n# Oracle Database Adapter for Sails Application.\n",
   "bugs": {

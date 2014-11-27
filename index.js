@@ -32,9 +32,10 @@ module.exports = (function() {
         casting: false,
         canReturnValues: false,
         escapeInserts: false,
-		declareDeleteAlias: false,
-		explicitTableAs: false,
-		prefixAlias: 'alias__'
+        declareDeleteAlias: false,
+        explicitTableAs: false,
+        prefixAlias: 'alias__',
+        stringDelimiter: "'"        
     };
 
     var adapter = {
@@ -291,7 +292,7 @@ module.exports = (function() {
                 connection.execute(columnsListQuery, [], function __DESCRIBE__(err, schema) {
 
                     if (err) {
-                        console.log("#Error fetching table columns (Describe) "+err.toString()+".");
+                        console.log("#Error fetching table columns (Describe) " + err.toString() + ".");
                         return cb(err);
                     }
                     //tester si la table n'existe pas
@@ -382,7 +383,7 @@ module.exports = (function() {
                 if (data)
                     connection.execute(query, data, function(err, result) {
                         if (err) {
-                            console.log("#Error executing QUERY " + err.toString()+ ".");
+                            console.log("#Error executing QUERY " + err.toString() + ".");
                             return cb(handleQueryError(err));
                         }
                         return cb(null, result);
@@ -500,7 +501,9 @@ module.exports = (function() {
                     //si le  champs est de type date time
                     else if (!_.isUndefined(definition[key].type) && definition[key].type === 'datetime') {
                         //préparation de la date à insérer
-                        var formattedDateTime = 'TO_DATE(' + data[key] + ',\'yyyy-mm-dd hh24:mi:ss\')';
+                        var formattedDateTime = 'null';
+                        if (!_.isUndefined(data[key]))
+                            formattedDateTime = 'TO_DATE(' + data[key] + ',\'yyyy-mm-dd hh24:mi:ss\')';
                         data[key] = formattedDateTime;
                     }
                     else if (!_.isUndefined(definition[key].type) && definition[key].type === 'boolean') {
@@ -601,12 +604,14 @@ module.exports = (function() {
                         if (key !== columnName)
                             delete data[key];
                         /* deleting not mapped attributes */
-                        if (_.isUndefined(definition[columnName]))
+                        if ((_.isUndefined(definition[columnName])) || (_.isUndefined(data[columnName])))
                             delete data[columnName];
                         //si le  champs est de type date time
                         if (!_.isUndefined(attributes[key].type) && attributes[key].type === 'datetime') {
                             //console.log(key + ' is auto_incremented');
-                            var formattedDateTime = 'TO_DATE(' + data[columnName] + ',\'yyyy-mm-dd hh24:mi:ss\')';
+                            var formattedDateTime = 'null';
+                            if (!_.isUndefined(data[columnName]))
+                                formattedDateTime = 'TO_DATE(' + data[columnName] + ',\'yyyy-mm-dd hh24:mi:ss\')';
                             data[columnName] = formattedDateTime;
                         }
                     });
@@ -626,7 +631,7 @@ module.exports = (function() {
                     // Run query
                     /*console.log('CEACH');
                      console.log(_query.query);*/
-                    console.log('Executing : ' + _query.query);
+                    console.log('Executing CE : ' + _query.query);
                     connection.execute(_query.query, [], function(err, results) {
                         if (err) {
                             console.log("#Error executing Create (CreateEach) " + err.toString() + ".");
@@ -702,7 +707,7 @@ module.exports = (function() {
                  console.log(options);*/
                 //limiting result to 1
                 if (options.limit) {
-                    if(!options.where)
+                    if (!options.where)
                         options.where = {};
                     if (options.limit === 1) {
                         options.where.ROWNUM = 1;
@@ -842,7 +847,7 @@ module.exports = (function() {
                         }
 
                         // Run query
-                        console.log('*',_query.query[0]);
+                        console.log('*', _query.query[0]);
                         connection.execute(_query.query[0], [], function(err, result) {
                             if (err) {
                                 console.log("#Error executing Find_2 (Update) " + err.toString() + ".");
@@ -1044,8 +1049,8 @@ module.exports = (function() {
                 console.log('Count *');
                 console.log(query);
                 connection.execute(query, [], function(err, result) {
-                    if (err){
-                        console.log('#Error counting table \''+collectionName+'\' rows (Count) '+err.toString()+'.');
+                    if (err) {
+                        console.log('#Error counting table \'' + collectionName + '\' rows (Count) ' + err.toString() + '.');
                         return cb(err);
                     }
                     // Return the count from the simplified query
@@ -1135,8 +1140,8 @@ module.exports = (function() {
                             processParent: function(next) {
                                 console.log('Executing : ', _query.query[0]);
                                 client.execute(_query.query[0], [], function __FIND__(err, result) {
-                                    if (err){
-                                        console.log('#Error fetching parent \''+collectionName+'\' rows (Join) '+err.toString()+'.');
+                                    if (err) {
+                                        console.log('#Error fetching parent \'' + collectionName + '\' rows (Join) ' + err.toString() + '.');
                                         return next(err);
                                     }
                                     var attrs = collection.attributes;
@@ -1311,8 +1316,8 @@ module.exports = (function() {
                                          }*/
                                         console.log('Executing : ', qs);
                                         client.execute(qs, [], function __FIND__(err, result) {
-                                            if (err){
-                                                console.log("#Error populating '"+childCollection+"' collection in '"+collectionName+"' (Join) "+err.toString()+".");
+                                            if (err) {
+                                                console.log("#Error populating '" + childCollection + "' collection in '" + collectionName + "' (Join) " + err.toString() + ".");
                                                 return next(err);
                                             }
                                             var groupedRecords = {};
