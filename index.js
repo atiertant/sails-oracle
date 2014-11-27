@@ -700,21 +700,44 @@ module.exports = (function() {
 
                 // Build find query
                 var schema = collection.waterline.schema;
+
+				//check if identity is a reserved keyword
+				var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
+				var reserved = sql.isKeyword(identity);
+				if (reserved) {
+					var escapedIdentity = 'RESERVED_' + identity;
+					schema[escapedIdentity] = schema[identity];
+					delete schema[identity];
+                    schema[escapedIdentity].identity = escapedIdentity;
+				}
+				
+
                 var processor = new Processor();
                 var _query;
                 var sequel = new Sequel(schema, sqlOptions);
                 /* console.log('options');
                  console.log(options);*/
                 //limiting result to 1
+				var findOne = false;
                 if (options.limit) {
                     if (!options.where)
                         options.where = {};
-                    if (options.limit === 1) {
-                        options.where.ROWNUM = 1;
+                    if (options.skip) {
+                        var skip = options.skip;
+                        var limit = skip + options.limit;
+                        options.where.ROWNUM = {min: skip, max: limit};
+                        delete options.skip;
                     } else {
                         options.where.ROWNUM = {'<=': options.limit};
                     }
+					if (options.limit === 1)
+                        findOne = true;
                     delete options.limit;
+				} else if (options.skip) {
+					if (!options.where)
+						options.where = {};
+					options.where.ROWNUM = {'>=': options.skip};
+					delete options.skip;
                 }
                 // Build a query for the specific query strategy
                 try {
@@ -729,14 +752,29 @@ module.exports = (function() {
                  }*/
                 console.log('Executing : ' + _query.query[0]);
                 connection.execute(_query.query[0], [], function(err, result) {
+					//check if identity was a reserved keyword
+					if (reserved) {
+						schema[identity] = schema[escapedIdentity];
+						delete schema[escapedIdentity];
+                    	schema[identity].identity = identity;
+					}
+
                     if (err) {
                         console.log('#Error executing Find ' + err.toString() + '.');
                         return cb(err);
                     }
+
                     /*console.log('------------->'+collectionName );
                      if(collectionName === 'tree_menu_test') console.log(result);*/
                     result = processor.synchronizeResultWithModelAndDelete(result, collection.attributes);
-                    cb(null, result);
+					if (findOne) {
+						if (result.length === 0)
+							cb(null, null);
+                        else
+                            cb(null, result[0]);
+                    }
+                    else
+                        cb(null, result);
                 });
 
             }
@@ -757,6 +795,16 @@ module.exports = (function() {
                 // Build find query
                 var schema = collection.waterline.schema;
                 var _query;
+
+				//check if identity is a reserved keyword
+				var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
+				var reserved = sql.isKeyword(identity);
+				if (reserved) {
+					var escapedIdentity = 'RESERVED_' + identity;
+					schema[escapedIdentity] = schema[identity];
+					delete schema[identity];
+                    schema[escapedIdentity].identity = escapedIdentity;
+				}				
 
                 var sequel = new Sequel(schema, sqlOptions);
 
@@ -849,10 +897,19 @@ module.exports = (function() {
                         // Run query
                         console.log('*', _query.query[0]);
                         connection.execute(_query.query[0], [], function(err, result) {
+
+							//check if identity was a reserved keyword
+							if (reserved) {
+								schema[identity] = schema[escapedIdentity];
+								delete schema[escapedIdentity];
+				            	schema[identity].identity = identity;
+							}
+
                             if (err) {
                                 console.log("#Error executing Find_2 (Update) " + err.toString() + ".");
                                 return cb(err);
                             }
+
                             result = processor.synchronizeResultWithModel(result, attrs);
                             cb(null, result);
                         });
@@ -880,6 +937,17 @@ module.exports = (function() {
                 // Build query
                 var schema = collection.waterline.schema;
                 var _query;
+
+				//check if identity is a reserved keyword
+				var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
+				var reserved = sql.isKeyword(identity);
+				if (reserved) {
+					var escapedIdentity = 'RESERVED_' + identity;
+					schema[escapedIdentity] = schema[identity];
+					delete schema[identity];
+                    schema[escapedIdentity].identity = escapedIdentity;
+				}	
+
                 var sequel = new Sequel(schema, sqlOptions);
 
                 // Build a query for the specific query strategy
@@ -899,8 +967,16 @@ module.exports = (function() {
                         }]
                 },
                 function(err, results) {
+					//check if identity was a reserved keyword
+					if (reserved) {
+						schema[identity] = schema[escapedIdentity];
+						delete schema[escapedIdentity];
+				        schema[identity].identity = identity;
+					}
+
                     if (err)
                         return cb(err);
+
                     cb(null, results.findRecords);
                 });
 
