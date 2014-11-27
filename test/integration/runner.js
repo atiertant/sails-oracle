@@ -67,11 +67,9 @@ new TestRunner({
 
   // Default connection config to use.
   config: {
-    schema: false,
     tns: process.env.WATERLINE_ADAPTER_TESTS_TNS || '(DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = localhost)(PORT = 1521))(CONNECT_DATA =(SERVER = DEDICATED)(SERVICE_NAME = sails_oracle)))',
     user: process.env.WATERLINE_ADAPTER_TESTS_USER || 'USER',
-    password: process.env.WATERLINE_ADAPTER_TESTS_PASSWORD || '',
-    adapter: "oracle"
+    password: process.env.WATERLINE_ADAPTER_TESTS_PASSWORD || ''
   },
 
   // The set of adapter interfaces to test against.
