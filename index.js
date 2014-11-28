@@ -5,7 +5,7 @@
 
 var async = require('async'),
         _ = require('underscore'),
-        lodash = require('lodash'),
+        //lodash = require('lodash'),
         oracle = require('oracle'),
         sql = require('./lib/sql.js'),
         Query = require('./lib/query'),
@@ -114,7 +114,6 @@ module.exports = (function() {
         //added to match waterline orm
         registerConnection: function(connection, collections, cb) {
             console.log("Registring connection ...");
-            /// console.log(collections.khalil._schema.schema);console.log("-----------------------------------------------------------");
             if (!connection.identity)
                 return cb("Errors.IdentityMissing");
             if (connections[connection.identity])
@@ -136,16 +135,6 @@ module.exports = (function() {
                 } else {
 
                     activeConnection.connection = connection;
-                    /*connection.execute("SELECT systimestamp FROM dual", [], function(err, results) {
-                     //connection.execute("SELECT * FROM AGENCE", [], function(err, results) {
-                     if (err) {
-                     console.log("Error executing query:", err);
-                     return;
-                     }
-                     
-                     console.log(results);
-                     
-                     });*/
                     console.log("Connection registred.");
                 }
             });
@@ -214,16 +203,10 @@ module.exports = (function() {
                         return cb(err);
                     console.log("Table " + tableName + " created.");
                     // creation des sequence pour les champs auto_inrement
-                    Object.keys(definition).forEach(function(key) {
-                        if (!_.isUndefined(definition[key].autoIncrement) && definition[key].autoIncrement) {
-                            //console.log(key + ' is auto_incremented');
-                            /*var start = 1;
-                             console.log(self);
-                             if (self.droppedSequences) {
-                             console.log(self.droppedSequences);
-                             start = self.droppedSequences['SEQ_' + tableName + '_' + key ] || 1;
-                             }*/
-                            sequenceQuery = 'CREATE SEQUENCE SEQ_' + key + ' INCREMENT BY 1 START WITH 1 NOMAXVALUE NOCYCLE NOCACHE';
+                    Object.keys(definition).forEach(function(columnName) {
+						var column = definition[columnName];
+						if (fieldIsAutoIncrement(column)) {
+                            sequenceQuery = 'CREATE SEQUENCE SEQ_' + columnName + ' INCREMENT BY 1 START WITH 1 NOMAXVALUE NOCYCLE NOCACHE';
                             console.log(sequenceQuery);
                             connection.execute(sequenceQuery, [], function(err, result) {
                                 if (err) {
@@ -231,7 +214,7 @@ module.exports = (function() {
                                         return;
                                     return;
                                 }
-                                console.log('Sequence \'SEQ_' + key + '\' created for auto incremented field \'' + key + '\'.');
+                                console.log('Sequence \'SEQ_' + columnName + '\' created for auto incremented field \'' + columnName + '\'.');
 
                             });
                         }
@@ -274,21 +257,12 @@ module.exports = (function() {
                 if (!collection) {
                     return cb(util.format('Unknown collection `%s` in connection `%s`', collectionName, connectionName));
                 }
-                //var tableName = SqlString.escapeId(collectionName);
+
                 var tableName = collectionName;
-                //tableName = 'ARTICLESOCIETE';
                 var columnsListQuery = "select COLUMN_NAME, DATA_TYPE, NULLABLE from USER_TAB_COLUMNS where TABLE_NAME = '" + tableName.toUpperCase() + "'";
                 var indexesQuery = "select index_name,COLUMN_NAME from user_ind_columns where table_name = '" + tableName.toUpperCase() + "'";
                 var primaryKeysQuery = "SELECT cols.table_name, cols.column_name, cols.position, cons.status, cons.owner FROM all_constraints cons, all_cons_columns cols WHERE cols.table_name = '" + tableName.toUpperCase() + "'AND cons.constraint_type = 'P'AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner ORDER BY cols.table_name, cols.position";
-                // Run query
-                /*if (LOG_QUERIES) {
-                 console.log('\nExecuting MySQL query: ',query);
-                 console.log('and: ',pkQuery);
-                 }*/
-                /*console.log("Requete : " + columnsListQuery);*/
-                //for primary key
 
-                //end for primary key
                 connection.execute(columnsListQuery, [], function __DESCRIBE__(err, schema) {
 
                     if (err) {
@@ -476,7 +450,8 @@ module.exports = (function() {
                 var collection = connectionObject.collections[collectionName];
                 var tableName = collectionName;
 
-                var _insertData = lodash.cloneDeep(data);
+                //var _insertData = lodash.cloneDeep(data);
+				var _insertData = _.clone(data);
 
                 // Prepare values
                 Object.keys(data).forEach(function(value) {
@@ -487,34 +462,25 @@ module.exports = (function() {
                 var autoIncPK = null;
                 var autoIncPKSeq = null;
                 var definition = collection.definition;
-                Object.keys(definition).forEach(function(key) {
-                    //si le champs est auto_incrémental
-                    if (!_.isUndefined(definition[key].autoIncrement) && definition[key].autoIncrement) {
-                        //console.log(key + ' is auto_incremented');
-                        var nextValQuery = 'SEQ_' + key + '.nextval';
-                        data[key] = nextValQuery;
-                        if (definition[key].hasOwnProperty('primaryKey')) {
-                            autoIncPK = key;
-                            autoIncPKSeq = 'SEQ_' + key;
+                Object.keys(definition).forEach(function(columnName) {
+					var column = definition[columnName];
+
+					if (fieldIsAutoIncrement(column)) {
+                        data[columnName] = SqlString.sequenceNextval(columnName);
+                        if (column.hasOwnProperty('primaryKey')) {
+                            autoIncPK = columnName;
+                            autoIncPKSeq = 'SEQ_' + columnName;
                         }
                     }
                     //si le  champs est de type date time
-                    else if (!_.isUndefined(definition[key].type) && definition[key].type === 'datetime') {
-                        //préparation de la date à insérer
-                        var formattedDateTime = 'null';
-                        if (!_.isUndefined(data[key]))
-                            formattedDateTime = 'TO_DATE(' + data[key] + ',\'yyyy-mm-dd hh24:mi:ss\')';
-                        data[key] = formattedDateTime;
+					if (fieldIsDatetime(column)) {
+						data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
                     }
-                    else if (!_.isUndefined(definition[key].type) && definition[key].type === 'boolean') {
-                        //préparation de la valeur booléene à insérer
-                        var bool = 0;
-                        if (data[key] === 'true')
-                            bool = 1;
-                        data[key] = bool;
+					else if (fieldIsBoolean(column)) {
+						data[columnName] = (data[columnName]) ? 1 : 0;
                     }
-                    else if (definition[key].hasOwnProperty('primaryKey')) {
-                        pk = key;
+                    else if (column.hasOwnProperty('primaryKey')) {
+                        pk = columnName;
                     }
                 });
                 //fin recherche
@@ -595,24 +561,20 @@ module.exports = (function() {
                     });
                     var attributes = collection.attributes;
                     var definition = collection.definition;
-                    Object.keys(attributes).forEach(function(key) {
+                    Object.keys(attributes).forEach(function(attributeName) {
+						var attribute = attributes[attributeName];
                         /* searching for column name, if it doesn't exist, we'll use attribute name */
-                        var columnName = attributes[key].columnName || key;
+                        var columnName = attribute.columnName || attributeName;
                         /* affecting values to add to the columns */
-                        data[columnName] = data[key];
+                        data[columnName] = data[attributeName];
                         /* deleting attributesto be added and their names are differnet from columns names */
-                        if (key !== columnName)
-                            delete data[key];
+                        if (attributeName !== columnName)
+                            delete data[attributeName];
                         /* deleting not mapped attributes */
                         if ((_.isUndefined(definition[columnName])) || (_.isUndefined(data[columnName])))
                             delete data[columnName];
-                        //si le  champs est de type date time
-                        if (!_.isUndefined(attributes[key].type) && attributes[key].type === 'datetime') {
-                            //console.log(key + ' is auto_incremented');
-                            var formattedDateTime = 'null';
-                            if (!_.isUndefined(data[columnName]))
-                                formattedDateTime = 'TO_DATE(' + data[columnName] + ',\'yyyy-mm-dd hh24:mi:ss\')';
-                            data[columnName] = formattedDateTime;
+						if (fieldIsDatetime(attribute)) {
+							data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
                         }
                     });
 
@@ -810,7 +772,8 @@ module.exports = (function() {
 
                 // Build a query for the specific query strategy
                 try {
-                    _query = sequel.find(collectionName, lodash.cloneDeep(options));
+                    //_query = sequel.find(collectionName, lodash.cloneDeep(options));
+					_query = sequel.find(collectionName, _.clone(options));
                 } catch (e) {
                     return cb(e);
                 }
@@ -841,26 +804,21 @@ module.exports = (function() {
                     Object.keys(values).forEach(function(value) {
                         values[value] = utils.prepareValue(values[value]);
                     });
+
                     var definition = collection.definition;
                     var attrs = collection.attributes;
-                    Object.keys(definition).forEach(function(key) {
-                        //si le  champs est de type date time
-                        if (!_.isUndefined(definition[key].type) && definition[key].type === 'datetime') {
-                            //console.log(key + ' is auto_incremented');
-                            if (!values[key])
+
+                    Object.keys(definition).forEach(function(columnName) {
+						var column = definition[columnName];
+
+						if (fieldIsDatetime(column)) {
+                            if (!values[columnName])
                                 return;
-                            var formattedDateTime = 'TO_DATE(' + values[key] + ',\'yyyy-mm-dd hh24:mi:ss\')';
-                            values[key] = formattedDateTime;
+                            values[columnName] = SqlString.dateField(values[columnName]);
                         }
-                        else if (!_.isUndefined(definition[key].type) && definition[key].type === 'boolean') {
-                            //préparation de la valeur booléene à insérer
-                            var bool = 0;
-                            if (values[key] === 'true')
-                            {
-                                bool = 1;
-                            }
-                            values[key] = bool;
-                            console.log(key + " = " + values[key]);
+						else if (fieldIsBoolean(column)) {
+							values[columnName] = (values[columnName]) ? 1 : 0;
+                            console.log(columnName + " = " + values[columnName]);
                         }
                     });
                     // Build query
@@ -1345,7 +1303,7 @@ module.exports = (function() {
                                         //console.log('ParentsRecord', parentRecords);
                                         var i = 0;
                                         parentRecords.forEach(function(parent) {
-                                            if (lodash.isNumber(parent[modelPk])) {
+                                            if (_.isNumber(parent[modelPk])) {
                                                 //qs += q.qs.replace('^?^', parent[pk]).slice(0,-32) + ' UNION ';
                                                 //var queryI = q.qs.replace('^?^', parent[pk]).slice(0, -32);
                                                 var queryI = q.qs.replace('^?^', parent[modelPk])/*.slice(0, -32)*/;
@@ -1540,12 +1498,12 @@ module.exports = (function() {
     //////////////                 //////////////////////////////////////////
 
     function _getPK(connectionIdentity, collectionIdentity) {
-
         var collectionDefinition;
         try {
             collectionDefinition = connections[connectionIdentity].collections[collectionIdentity].definition;
 
-            return lodash.find(Object.keys(collectionDefinition), function _findPK(key) {
+            //return lodash.find(Object.keys(collectionDefinition), function _findPK(key) {
+			return _.find(Object.keys(collectionDefinition), function _findPK(key) {
                 var attrDef = collectionDefinition[key];
                 if (attrDef && attrDef.primaryKey)
                     return key;
@@ -1704,7 +1662,17 @@ module.exports = (function() {
         return formattedErr || err;
     }
 
+	//check if column or attribute is a boolean
+	function fieldIsBoolean(column) {
+		return (!_.isUndefined(column.type) && column.type === 'boolean');	
+	}
 
+	function fieldIsDatetime(column) {
+		return (!_.isUndefined(column.type) && column.type === 'datetime');
+	}
 
+	function fieldIsAutoIncrement(column) {
+		return (!_.isUndefined(column.autoIncrement) && column.autoIncrement);
+	}
 
 })();

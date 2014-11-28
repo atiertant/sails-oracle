@@ -4,7 +4,8 @@
 
 // Dependencies
 var SqlString = require('./lib/SqlString');
-var _ = require('lodash');
+//var _ = require('lodash');
+var _ = require('underscore');
 var url = require('url');
 
 // Module Exports
