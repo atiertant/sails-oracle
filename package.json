@@ -1,6 +1,6 @@
 {
   "name": "sails-oracledb",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Oracle Database adapter for Sails.js",
   "main": "index.js",
   "scripts": {
@@ -30,7 +30,8 @@
     "underscore.string": "~2.3.1",
     "waterline-errors": "~0.10.0",
     "waterline-sequel": "git://github.com/atiertant/waterline-sequel#master",
-    "waterline-cursor": "~0.0.5"
+    "waterline-cursor": "~0.0.5",
+    "md5": "1.0.0"
   },
   "devDependencies": {
     "mocha": "~1.13.0",

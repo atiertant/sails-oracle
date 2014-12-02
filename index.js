@@ -16,7 +16,10 @@ var Processor = require('./lib/processor');
 var Cursor = require('waterline-cursor');
 var hop = utils.object.hasOwnProperty;
 var SqlString = require('./lib/SqlString');
-//var Errors = require('waterline-errors').adapter;
+var Errors = require('waterline-errors').adapter;
+var md5 = require('md5');
+
+var LOG_QUERIES = false;
 
 module.exports = (function() {
 
@@ -27,7 +30,7 @@ module.exports = (function() {
 
     var sqlOptions = {
         parameterized: false,
-        caseSensitive: true,
+        caseSensitive: false,
         escapeCharacter: '',
         casting: false,
         canReturnValues: false,
@@ -128,6 +131,9 @@ module.exports = (function() {
 
 
             var activeConnection = connections[connection.identity];
+
+			console.log("active connection is: " + connection.identity);
+
             oracle.connect(activeConnection.config, function(err, connection) {
                 if (err) {
                     console.log("Error connecting to db:", err);
@@ -147,8 +153,9 @@ module.exports = (function() {
 
         // Optional hook fired when a model is unregistered, typically at server halt
         // useful for tearing down remaining open connections, etc.
-        teardown: function(cb) {
-            cb();
+        teardown: function(connectionName,cb) {
+ 			console.log("closing connection " + connectionName);
+			return cb();
         },
         // REQUIRED method if integrating with a schemaful database
         define: function(connectionName, collectionName, definition, cb, connection) {
@@ -206,7 +213,7 @@ module.exports = (function() {
                     Object.keys(definition).forEach(function(columnName) {
 						var column = definition[columnName];
 						if (fieldIsAutoIncrement(column)) {
-                            sequenceQuery = 'CREATE SEQUENCE SEQ_' + columnName + ' INCREMENT BY 1 START WITH 1 NOMAXVALUE NOCYCLE NOCACHE';
+                            sequenceQuery = 'CREATE SEQUENCE '+ sequence(tableName,columnName) + ' INCREMENT BY 1 START WITH 1 NOMAXVALUE NOCYCLE NOCACHE';
                             console.log(sequenceQuery);
                             connection.execute(sequenceQuery, [], function(err, result) {
                                 if (err) {
@@ -466,10 +473,10 @@ module.exports = (function() {
 					var column = definition[columnName];
 
 					if (fieldIsAutoIncrement(column)) {
-                        data[columnName] = SqlString.sequenceNextval(columnName);
+                        data[columnName] = sequenceNextval(tableName,columnName);
                         if (column.hasOwnProperty('primaryKey')) {
                             autoIncPK = columnName;
-                            autoIncPKSeq = 'SEQ_' + columnName;
+                            autoIncPKSeq = sequence(tableName,columnName); 
                         }
                     }
                     //si le  champs est de type date time
@@ -591,8 +598,6 @@ module.exports = (function() {
                     }
 
                     // Run query
-                    /*console.log('CEACH');
-                     console.log(_query.query);*/
                     console.log('Executing CE : ' + _query.query);
                     connection.execute(_query.query, [], function(err, results) {
                         if (err) {
@@ -677,30 +682,24 @@ module.exports = (function() {
                 var processor = new Processor();
                 var _query;
                 var sequel = new Sequel(schema, sqlOptions);
-                /* console.log('options');
-                 console.log(options);*/
-                //limiting result to 1
-				var findOne = false;
-                if (options.limit) {
-                    if (!options.where)
+
+				if ((options.limit || options.skip) && !options.where)
                         options.where = {};
-                    if (options.skip) {
-                        var skip = options.skip;
-                        var limit = skip + options.limit;
-                        options.where.ROWNUM = {min: skip, max: limit};
-                        delete options.skip;
-                    } else {
-                        options.where.ROWNUM = {'<=': options.limit};
-                    }
-					if (options.limit === 1)
-                        findOne = true;
-                    delete options.limit;
-				} else if (options.skip) {
-					if (!options.where)
-						options.where = {};
+
+                if (options.limit && options.skip) {
+					options.where.ROWNUM = {min: options.skip, max: options.limit};
+					delete options.skip;
+					delete options.limit;
+				}
+				else if (options.limit) {
+					options.where.ROWNUM = {'<=': options.limit};
+					delete options.limit;
+				}
+				else if (options.skip) {
 					options.where.ROWNUM = {'>=': options.skip};
 					delete options.skip;
-                }
+				}
+
                 // Build a query for the specific query strategy
                 try {
                     _query = sequel.find(collectionName, options);
@@ -709,9 +708,9 @@ module.exports = (function() {
                 }
 
                 // Run query
-                /* if (LOG_QUERIES) {
-                 console.log('\nExecuting MySQL query: ', query);
-                 }*/
+                if (LOG_QUERIES) {
+                 console.log('\nExecuting ORACLE query: ', query);
+                }
                 console.log('Executing : ' + _query.query[0]);
                 connection.execute(_query.query[0], [], function(err, result) {
 					//check if identity was a reserved keyword
@@ -726,17 +725,14 @@ module.exports = (function() {
                         return cb(err);
                     }
 
-                    /*console.log('------------->'+collectionName );
-                     if(collectionName === 'tree_menu_test') console.log(result);*/
+
                     result = processor.synchronizeResultWithModelAndDelete(result, collection.attributes);
-					if (findOne) {
-						if (result.length === 0)
-							cb(null, null);
-                        else
-                            cb(null, result[0]);
-                    }
+
+					if (result.length > 0)
+						cb(null, result);
                     else
-                        cb(null, result);
+                        cb(null, null);
+
                 });
 
             }
@@ -1585,15 +1581,22 @@ module.exports = (function() {
             // console.log("Provisioned new connection.");
             // handleDisconnect(connection, config);
             // "ALTER SESSION SET nls_date_Format = 'YYYY-MM-DD:HH24:MI:SS'"
-
-            connection.execute("ALTER SESSION SET nls_date_Format = 'YYYY-MM-DD:HH24:MI:SS'", [], function(err, results) {
-
+			var queries = [];
+			queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+			queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+			queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
+			queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
+			async.eachSeries(queries,function(query, callback){
+				connection.execute(query, [], function(err, results) {
+					callback();
+				});
+			},function(err){
                 logic(connection, function(err, result) {
 
                     if (err) {
                         cb(err, 1);
-                        console.error("Logic error in Oracle ORM.");
-                        console.error(err);
+                        console.log("Logic error in Oracle ORM.");
+                        console.log(err);
                         connection.close();
                         return;
                     }
@@ -1601,7 +1604,7 @@ module.exports = (function() {
                     connection.close();
                     cb(err, result);
                 });
-            });
+			});
         }
     }
 
@@ -1673,6 +1676,14 @@ module.exports = (function() {
 
 	function fieldIsAutoIncrement(column) {
 		return (!_.isUndefined(column.autoIncrement) && column.autoIncrement);
+	}
+
+	function sequence(tableName, columnName) {
+		return 'SEQ_' + tableName.substring(0, 10) + '_' + columnName.substring(0, 10) + md5.digest_s(tableName + columnName).substring(0, 5);
+	}
+
+	function sequenceNextval(tableName, columnName) {
+		return sequence(tableName, columnName) + '.nextval';
 	}
 
 })();
