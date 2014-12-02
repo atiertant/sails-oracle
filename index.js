@@ -1,8 +1,3 @@
-/*---------------------------------------------------------------
- :: sails-boilerplate
- -> adapter
- ---------------------------------------------------------------*/
-
 var async = require('async'),
         _ = require('underscore'),
         //lodash = require('lodash'),
@@ -38,11 +33,19 @@ module.exports = (function() {
         declareDeleteAlias: false,
         explicitTableAs: false,
         prefixAlias: 'alias__',
-        stringDelimiter: "'"        
+        stringDelimiter: "'",
+        rownum: true
     };
 
     var adapter = {
-        droppedSequences: [],
+        autoIncrements: [],
+        autoIncNextval: function(tableName, columnName) {
+            this.autoIncrements[tableName] = this.autoIncrements[tableName] || [];
+            this.autoIncrements[tableName][columnName] = this.autoIncrements[tableName][columnName] || 1;
+            var nextval = this.autoIncrements[tableName][columnName] + 1;
+            this.autoIncrements[tableName][columnName] = nextval;
+            return nextval;
+        },
         // Set to true if this adapter supports (or requires) things like data types, validations, keys, etc.
         // If true, the schema for models using this adapter will be automatically synced when the server starts.
         // Not terribly relevant if not using a non-SQL / non-schema-ed data store
@@ -132,7 +135,7 @@ module.exports = (function() {
 
             var activeConnection = connections[connection.identity];
 
-			console.log("active connection is: " + connection.identity);
+            console.log("active connection is: " + connection.identity);
 
             oracle.connect(activeConnection.config, function(err, connection) {
                 if (err) {
@@ -153,9 +156,9 @@ module.exports = (function() {
 
         // Optional hook fired when a model is unregistered, typically at server halt
         // useful for tearing down remaining open connections, etc.
-        teardown: function(connectionName,cb) {
- 			console.log("closing connection " + connectionName);
-			return cb();
+        teardown: function(connectionName, cb) {
+            console.log("closing connection " + connectionName);
+            return cb();
         },
         // REQUIRED method if integrating with a schemaful database
         define: function(connectionName, collectionName, definition, cb, connection) {
@@ -185,9 +188,7 @@ module.exports = (function() {
 
                 // Build query
                 var query = 'CREATE TABLE ' + tableName + ' (' + schema + ')';
-                var sequenceQuery = null;
-                /*if (sql.hasAutoIncrementedPrimaryKey(definition))
-                 sequenceQuery = 'CREATE SEQUENCE SEQKHALIL01 INCREMENT BY 1START WITH 1 NOMAXVALUE NOCYCLE NOCACHE;';*/
+
                 if (connectionObject.config.charset) {
                     query += ' DEFAULT CHARSET ' + connectionObject.config.charset;
                 }
@@ -209,20 +210,20 @@ module.exports = (function() {
                     if (err)
                         return cb(err);
                     console.log("Table " + tableName + " created.");
-                    // creation des sequence pour les champs auto_inrement
+                    // creation des sequence pour les champs autoIncrement
                     Object.keys(definition).forEach(function(columnName) {
-						var column = definition[columnName];
-						if (fieldIsAutoIncrement(column)) {
-                            sequenceQuery = 'CREATE SEQUENCE '+ sequence(tableName,columnName) + ' INCREMENT BY 1 START WITH 1 NOMAXVALUE NOCYCLE NOCACHE';
-                            console.log(sequenceQuery);
-                            connection.execute(sequenceQuery, [], function(err, result) {
+                        var column = definition[columnName];
+                        if (fieldIsAutoIncrement(column)) {
+                            //init autoIncrement values
+                            self.autoIncrements[tableName] = self.autoIncrements[tableName] || [];
+                            self.autoIncrements[tableName][columnName] = 1;
+                            var autoIncrementQuery = "SELECT MAX(" + columnName + ") AS MAX FROM " + tableName;
+                            connection.execute(autoIncrementQuery, [], function(err, autoInc) {
                                 if (err) {
-                                    if (err.toString().indexOf('ORA-00955: name is already used by an existing object') !== -1)
-                                        return;
+                                    console.log("could not get last autoIncrement value");
                                     return;
                                 }
-                                console.log('Sequence \'SEQ_' + columnName + '\' created for auto incremented field \'' + columnName + '\'.');
-
+                                self.autoIncrements[tableName][columnName] = autoInc[0]['MAX'] || 1;
                             });
                         }
                     });
@@ -266,6 +267,14 @@ module.exports = (function() {
                 }
 
                 var tableName = collectionName;
+                
+                /*
+                var queries = [];
+                queries[0] = "SELECT COLUMN_NAME, DATA_TYPE, NULLABLE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = '" + tableName.toUpperCase() + "'";
+                queries[1] = "SELECT index_name,COLUMN_NAME FROM user_ind_columns WHERE table_name = '" + tableName.toUpperCase() + "'";
+                */
+                
+                
                 var columnsListQuery = "select COLUMN_NAME, DATA_TYPE, NULLABLE from USER_TAB_COLUMNS where TABLE_NAME = '" + tableName.toUpperCase() + "'";
                 var indexesQuery = "select index_name,COLUMN_NAME from user_ind_columns where table_name = '" + tableName.toUpperCase() + "'";
                 var primaryKeysQuery = "SELECT cols.table_name, cols.column_name, cols.position, cons.status, cons.owner FROM all_constraints cons, all_cons_columns cols WHERE cols.table_name = '" + tableName.toUpperCase() + "'AND cons.constraint_type = 'P'AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner ORDER BY cols.table_name, cols.position";
@@ -282,15 +291,13 @@ module.exports = (function() {
                         console.log('Table \'' + collectionName + '\' doesn\'t exist, creating it ...');
                         return cb();
                     }
-                    /*console.log("-----------------------------------schema----------------------------------------");
-                     console.log(schema);*/
+
                     connection.execute(indexesQuery, [], function(err, indexesResult) {
                         if (err) {
                             console.log("#Error executing indexes query (Describe) " + err.toString() + ".");
                             return cb(err);
                         }
-                        /* console.log("-----------------------------------indexes Result----------------------------------------");
-                         console.log(indexesResult);*/
+
                         //retourne la liste des clés primaires
                         connection.execute(primaryKeysQuery, [], function(err, tablePrimaryKeys) {
                             if (err) {
@@ -322,22 +329,19 @@ module.exports = (function() {
 
                                     if (attr.COLUMN_NAME === result.COLUMN_NAME)
                                     {
-                                        //console.log(attr.COLUMN_NAME + ' is indexed as ' + result.COLUMN_NAME);
+                                        console.log(attr.COLUMN_NAME + ' is indexed as ' + result.COLUMN_NAME);
                                         attr.indexed = true;
 
                                     }
                                 });
                             });
                             // Convert mysql format to standard javascript object
-                            /*console.log('definition normalize');
-                             console.log(collection.attributes);*/
+
                             var normalizedSchema = sql.normalizeSchema(schema, collection.attributes);
                             // Set Internal Schema Mapping
                             collection.schema = normalizedSchema;
                             console.log('Table \'' + collectionName + '\' described.');
                             // TODO: check that what was returned actually matches the cache
-                            /*console.log("2+++++++++++++++++Normalized Schema+++ADAPTER");
-                             console.log(normalizedSchema);*/
                             cb(null, normalizedSchema);
                         });
                     });
@@ -383,7 +387,7 @@ module.exports = (function() {
         // REQUIRED method if integrating with a schemaful database
         drop: function(connectionName, collectionName, relations, cb, connection) {
             // Drop a "table" or "collection" schema from the data store
-
+            var self = this;
 
             if (typeof relations === 'function') {
                 cb = relations;
@@ -410,7 +414,6 @@ module.exports = (function() {
                     var query = 'DROP TABLE ' + tableName.toUpperCase();
 
                     // Run query
-                    //console.log('Drop Query');
                     console.log('Executing : ' + query);
                     connection.execute(query, [], function __DROP__(err, result) {
                         if (err) {
@@ -419,8 +422,10 @@ module.exports = (function() {
                                 return next(err);
                             result = null;
                         }
-                        if (result)
+                        if (result) {
                             console.log('Table \'' + collectionName + '\' dropped.');
+                            self.autoIncrements[tableName] = [];
+                        }
                         next(null, result);
                     });
                 }
@@ -444,64 +449,67 @@ module.exports = (function() {
 
         // REQUIRED method if users expect to call Model.create() or any methods
         create: function(connectionName, collectionName, data, cb, connection) {
+            var self = this;
+            var connectionObject = connections[connectionName];
+            var collection = connectionObject.collections[collectionName];
+            var tableName = collectionName;
 
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__CREATE__, connections[connectionName].config, cb);
-            } else {
-                __CREATE__(connection, cb);
+            //var _insertData = lodash.cloneDeep(data);
+            var _insertData = _.clone(data);
+
+            // Prepare values
+            Object.keys(data).forEach(function(value) {
+                data[value] = utils.prepareValue(data[value]);
+            });
+            //recherche des champs incrémentals et de type date et affectation des valeurs lues des séquences
+            var pk = null;
+            var autoIncPK = null;
+            var autoIncPKval = null;
+
+            var definition = collection.definition;
+            Object.keys(definition).forEach(function(columnName) {
+                var column = definition[columnName];
+
+                if (fieldIsAutoIncrement(column)) {
+                    data[columnName] = self.autoIncNextval(tableName, columnName);
+                    if (column.hasOwnProperty('primaryKey')) {
+                        autoIncPK = columnName;
+                        autoIncPKval = self.autoIncrements[tableName][columnName];
+                    }
+                }
+                //si le  champs est de type date time
+                if (fieldIsDatetime(column)) {
+                    data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
+                }
+                else if (fieldIsBoolean(column)) {
+                    data[columnName] = (data[columnName]) ? 1 : 0;
+                }
+                else if (column.hasOwnProperty('primaryKey')) {
+                    pk = columnName;
+                }
+            });
+            //fin recherche
+            var schema = collection.waterline.schema;
+            var _query;
+
+            var sequel = new Sequel(schema, sqlOptions);
+
+            // Build a query for the specific query strategy
+            try {
+                _query = sequel.create(collectionName, data);
+            } catch (e) {
+                return cb(e);
             }
 
-            function __CREATE__(connection, cb) {
 
-                var connectionObject = connections[connectionName];
-                var collection = connectionObject.collections[collectionName];
-                var tableName = collectionName;
 
-                //var _insertData = lodash.cloneDeep(data);
-				var _insertData = _.clone(data);
+            if (_.isUndefined(connection)) {
+                return spawnConnection(__QUERY__, connections[connectionName].config, cb);
+            } else {
+                __QUERY__(connection, cb);
+            }
 
-                // Prepare values
-                Object.keys(data).forEach(function(value) {
-                    data[value] = utils.prepareValue(data[value]);
-                });
-                //recherche des champs incrémentals et de type date et affectation des valeurs lues des séquences
-                var pk = null;
-                var autoIncPK = null;
-                var autoIncPKSeq = null;
-                var definition = collection.definition;
-                Object.keys(definition).forEach(function(columnName) {
-					var column = definition[columnName];
-
-					if (fieldIsAutoIncrement(column)) {
-                        data[columnName] = sequenceNextval(tableName,columnName);
-                        if (column.hasOwnProperty('primaryKey')) {
-                            autoIncPK = columnName;
-                            autoIncPKSeq = sequence(tableName,columnName); 
-                        }
-                    }
-                    //si le  champs est de type date time
-					if (fieldIsDatetime(column)) {
-						data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
-                    }
-					else if (fieldIsBoolean(column)) {
-						data[columnName] = (data[columnName]) ? 1 : 0;
-                    }
-                    else if (column.hasOwnProperty('primaryKey')) {
-                        pk = columnName;
-                    }
-                });
-                //fin recherche
-                var schema = collection.waterline.schema;
-                var _query;
-
-                var sequel = new Sequel(schema, sqlOptions);
-
-                // Build a query for the specific query strategy
-                try {
-                    _query = sequel.create(collectionName, data);
-                } catch (e) {
-                    return cb(e);
-                }
+            function __QUERY__(connection, cb) {
 
                 // Run query
                 console.log('Executing : ' + _query.query);
@@ -515,20 +523,9 @@ module.exports = (function() {
                     var autoIncData = {};
                     if (autoIncPK) {
                         //récupération du dernier ID inséré
-
-                        connection.execute('SELECT ' + autoIncPKSeq.toUpperCase() + '.CURRVAL FROM DUAL', [], function(err, lastIdresult) {
-                            if (err) {
-                                console.log("#Error executing last incremented Id query (Create) " + err.toString() + ".");
-                                return cb(err, null);
-                            }
-
-                            if (lastIdresult[0])
-                                autoIncData[autoIncPK] = lastIdresult[0].CURRVAL;
-                            //console.log('finalResult : ', autoIncData[autoIncPK]);
-                            var values = _.extend({}, _insertData, autoIncData);
-                            //console.log('CreatedRecord :', values);
-                            cb(err, values);
-                        });
+                        autoIncData[autoIncPK] = autoIncPKval;
+                        var values = _.extend({}, _insertData, autoIncData);
+                        cb(err, values);
                     }
                     else {
                         autoIncData[pk] = data[pk];
@@ -538,8 +535,7 @@ module.exports = (function() {
 
                 });
             }
-        }
-        ,
+        },
         // Override of createEach to share a single connection
         // instead of using a separate connection for each request
         createEach: function(connectionName, collectionName, valuesList, cb, connection) {
@@ -566,10 +562,11 @@ module.exports = (function() {
                     Object.keys(data).forEach(function(value) {
                         data[value] = utils.prepareValue(data[value]);
                     });
+
                     var attributes = collection.attributes;
                     var definition = collection.definition;
                     Object.keys(attributes).forEach(function(attributeName) {
-						var attribute = attributes[attributeName];
+                        var attribute = attributes[attributeName];
                         /* searching for column name, if it doesn't exist, we'll use attribute name */
                         var columnName = attribute.columnName || attributeName;
                         /* affecting values to add to the columns */
@@ -580,8 +577,8 @@ module.exports = (function() {
                         /* deleting not mapped attributes */
                         if ((_.isUndefined(definition[columnName])) || (_.isUndefined(data[columnName])))
                             delete data[columnName];
-						if (fieldIsDatetime(attribute)) {
-							data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
+                        if (fieldIsDatetime(attribute)) {
+                            data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
                         }
                     });
 
@@ -668,37 +665,35 @@ module.exports = (function() {
                 // Build find query
                 var schema = collection.waterline.schema;
 
-				//check if identity is a reserved keyword
-				var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
-				var reserved = sql.isKeyword(identity);
-				if (reserved) {
-					var escapedIdentity = 'RESERVED_' + identity;
-					schema[escapedIdentity] = schema[identity];
-					delete schema[identity];
+                //check if identity is a reserved keyword
+                var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
+                var reserved = sql.isKeyword(identity);
+                if (reserved) {
+                    var escapedIdentity = 'RESERVED_' + identity;
+                    schema[escapedIdentity] = schema[identity];
+                    delete schema[identity];
                     schema[escapedIdentity].identity = escapedIdentity;
-				}
-				
+                }
+
 
                 var processor = new Processor();
                 var _query;
                 var sequel = new Sequel(schema, sqlOptions);
-
-				if ((options.limit || options.skip) && !options.where)
-                        options.where = {};
-
-                if (options.limit && options.skip) {
-					options.where.ROWNUM = {min: options.skip, max: options.limit};
-					delete options.skip;
-					delete options.limit;
-				}
-				else if (options.limit) {
-					options.where.ROWNUM = {'<=': options.limit};
-					delete options.limit;
-				}
-				else if (options.skip) {
-					options.where.ROWNUM = {'>=': options.skip};
-					delete options.skip;
-				}
+                
+                //set default order by Primary key autoIncrement
+                if (!options.groupBy) {
+                    var PK = _getPK(connectionName, collectionName);
+                    if (!options.sort) {
+                        options.sort = {};
+                    }
+                    options.sort[PK] = 1;
+                }
+                
+                
+ 		var limit = options.limit || null;
+                var skip = options.skip || null;
+                delete options.skip;
+                delete options.limit;
 
                 // Build a query for the specific query strategy
                 try {
@@ -706,19 +701,34 @@ module.exports = (function() {
                 } catch (e) {
                     return cb(e);
                 }
+				
+				var findQuery = _query.query[0];
+
+                if (limit && skip) {
+                    var min = skip;
+                    var max = skip + limit;
+                    findQuery = 'SELECT * FROM ('+findQuery+') WHERE LINE_NUMBER > '+min+' and LINE_NUMBER <= '+max;
+                }
+                else if (limit) {
+                    findQuery = 'SELECT * FROM ('+findQuery+') WHERE LINE_NUMBER <= '+limit;
+                }
+                else if (skip) {
+                    findQuery = 'SELECT * FROM ('+findQuery+') WHERE LINE_NUMBER > '+skip;
+                }
+
 
                 // Run query
                 if (LOG_QUERIES) {
-                 console.log('\nExecuting ORACLE query: ', query);
+                    console.log('\nExecuting ORACLE query: ', query);
                 }
                 console.log('Executing : ' + _query.query[0]);
-                connection.execute(_query.query[0], [], function(err, result) {
-					//check if identity was a reserved keyword
-					if (reserved) {
-						schema[identity] = schema[escapedIdentity];
-						delete schema[escapedIdentity];
-                    	schema[identity].identity = identity;
-					}
+                connection.execute(findQuery, [], function(err, result) {
+                    //check if identity was a reserved keyword
+                    if (reserved) {
+                        schema[identity] = schema[escapedIdentity];
+                        delete schema[escapedIdentity];
+                        schema[identity].identity = identity;
+                    }
 
                     if (err) {
                         console.log('#Error executing Find ' + err.toString() + '.');
@@ -728,8 +738,8 @@ module.exports = (function() {
 
                     result = processor.synchronizeResultWithModelAndDelete(result, collection.attributes);
 
-					if (result.length > 0)
-						cb(null, result);
+                    if (result.length > 0)
+                        cb(null, result);
                     else
                         cb(null, null);
 
@@ -754,22 +764,22 @@ module.exports = (function() {
                 var schema = collection.waterline.schema;
                 var _query;
 
-				//check if identity is a reserved keyword
-				var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
-				var reserved = sql.isKeyword(identity);
-				if (reserved) {
-					var escapedIdentity = 'RESERVED_' + identity;
-					schema[escapedIdentity] = schema[identity];
-					delete schema[identity];
+                //check if identity is a reserved keyword
+                var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
+                var reserved = sql.isKeyword(identity);
+                if (reserved) {
+                    var escapedIdentity = 'RESERVED_' + identity;
+                    schema[escapedIdentity] = schema[identity];
+                    delete schema[identity];
                     schema[escapedIdentity].identity = escapedIdentity;
-				}				
+                }
 
                 var sequel = new Sequel(schema, sqlOptions);
 
                 // Build a query for the specific query strategy
                 try {
                     //_query = sequel.find(collectionName, lodash.cloneDeep(options));
-					_query = sequel.find(collectionName, _.clone(options));
+                    _query = sequel.find(collectionName, _.clone(options));
                 } catch (e) {
                     return cb(e);
                 }
@@ -805,15 +815,15 @@ module.exports = (function() {
                     var attrs = collection.attributes;
 
                     Object.keys(definition).forEach(function(columnName) {
-						var column = definition[columnName];
+                        var column = definition[columnName];
 
-						if (fieldIsDatetime(column)) {
+                        if (fieldIsDatetime(column)) {
                             if (!values[columnName])
                                 return;
                             values[columnName] = SqlString.dateField(values[columnName]);
                         }
-						else if (fieldIsBoolean(column)) {
-							values[columnName] = (values[columnName]) ? 1 : 0;
+                        else if (fieldIsBoolean(column)) {
+                            values[columnName] = (values[columnName]) ? 1 : 0;
                             console.log(columnName + " = " + values[columnName]);
                         }
                     });
@@ -852,12 +862,12 @@ module.exports = (function() {
                         console.log('*', _query.query[0]);
                         connection.execute(_query.query[0], [], function(err, result) {
 
-							//check if identity was a reserved keyword
-							if (reserved) {
-								schema[identity] = schema[escapedIdentity];
-								delete schema[escapedIdentity];
-				            	schema[identity].identity = identity;
-							}
+                            //check if identity was a reserved keyword
+                            if (reserved) {
+                                schema[identity] = schema[escapedIdentity];
+                                delete schema[escapedIdentity];
+                                schema[identity].identity = identity;
+                            }
 
                             if (err) {
                                 console.log("#Error executing Find_2 (Update) " + err.toString() + ".");
@@ -892,15 +902,15 @@ module.exports = (function() {
                 var schema = collection.waterline.schema;
                 var _query;
 
-				//check if identity is a reserved keyword
-				var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
-				var reserved = sql.isKeyword(identity);
-				if (reserved) {
-					var escapedIdentity = 'RESERVED_' + identity;
-					schema[escapedIdentity] = schema[identity];
-					delete schema[identity];
+                //check if identity is a reserved keyword
+                var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
+                var reserved = sql.isKeyword(identity);
+                if (reserved) {
+                    var escapedIdentity = 'RESERVED_' + identity;
+                    schema[escapedIdentity] = schema[identity];
+                    delete schema[identity];
                     schema[escapedIdentity].identity = escapedIdentity;
-				}	
+                }
 
                 var sequel = new Sequel(schema, sqlOptions);
 
@@ -921,12 +931,12 @@ module.exports = (function() {
                         }]
                 },
                 function(err, results) {
-					//check if identity was a reserved keyword
-					if (reserved) {
-						schema[identity] = schema[escapedIdentity];
-						delete schema[escapedIdentity];
-				        schema[identity].identity = identity;
-					}
+                    //check if identity was a reserved keyword
+                    if (reserved) {
+                        schema[identity] = schema[escapedIdentity];
+                        delete schema[escapedIdentity];
+                        schema[identity].identity = identity;
+                    }
 
                     if (err)
                         return cb(err);
@@ -1499,7 +1509,7 @@ module.exports = (function() {
             collectionDefinition = connections[connectionIdentity].collections[collectionIdentity].definition;
 
             //return lodash.find(Object.keys(collectionDefinition), function _findPK(key) {
-			return _.find(Object.keys(collectionDefinition), function _findPK(key) {
+            return _.find(Object.keys(collectionDefinition), function _findPK(key) {
                 var attrDef = collectionDefinition[key];
                 if (attrDef && attrDef.primaryKey)
                     return key;
@@ -1581,16 +1591,16 @@ module.exports = (function() {
             // console.log("Provisioned new connection.");
             // handleDisconnect(connection, config);
             // "ALTER SESSION SET nls_date_Format = 'YYYY-MM-DD:HH24:MI:SS'"
-			var queries = [];
-			queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
-			queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
-			queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
-			queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
-			async.eachSeries(queries,function(query, callback){
-				connection.execute(query, [], function(err, results) {
-					callback();
-				});
-			},function(err){
+            var queries = [];
+            queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+            queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+            queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
+            queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
+            async.eachSeries(queries, function(query, callback) {
+                connection.execute(query, [], function(err, results) {
+                    callback();
+                });
+            }, function(err) {
                 logic(connection, function(err, result) {
 
                     if (err) {
@@ -1604,7 +1614,7 @@ module.exports = (function() {
                     connection.close();
                     cb(err, result);
                 });
-			});
+            });
         }
     }
 
@@ -1665,25 +1675,17 @@ module.exports = (function() {
         return formattedErr || err;
     }
 
-	//check if column or attribute is a boolean
-	function fieldIsBoolean(column) {
-		return (!_.isUndefined(column.type) && column.type === 'boolean');	
-	}
+    //check if column or attribute is a boolean
+    function fieldIsBoolean(column) {
+        return (!_.isUndefined(column.type) && column.type === 'boolean');
+    }
 
-	function fieldIsDatetime(column) {
-		return (!_.isUndefined(column.type) && column.type === 'datetime');
-	}
+    function fieldIsDatetime(column) {
+        return (!_.isUndefined(column.type) && column.type === 'datetime');
+    }
 
-	function fieldIsAutoIncrement(column) {
-		return (!_.isUndefined(column.autoIncrement) && column.autoIncrement);
-	}
-
-	function sequence(tableName, columnName) {
-		return 'SEQ_' + tableName.substring(0, 10) + '_' + columnName.substring(0, 10) + md5.digest_s(tableName + columnName).substring(0, 5);
-	}
-
-	function sequenceNextval(tableName, columnName) {
-		return sequence(tableName, columnName) + '.nextval';
-	}
+    function fieldIsAutoIncrement(column) {
+        return (!_.isUndefined(column.autoIncrement) && column.autoIncrement);
+    }
 
 })();
