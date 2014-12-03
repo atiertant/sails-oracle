@@ -1,10 +1,9 @@
-var async = require('async'),
-        _ = require('underscore'),
-        //lodash = require('lodash'),
-        oracle = require('oracle'),
-        sql = require('./lib/sql.js'),
-        Query = require('./lib/query'),
-        utils = require('./utils');
+var async = require('async');
+var _ = require('underscore');
+var oracle = require('oracle');
+var sql = require('./lib/sql.js');
+var Query = require('./lib/query');
+var utils = require('./utils');
 _.str = require('underscore.string');
 var Sequel = require('waterline-sequel');
 var Processor = require('./lib/processor');
@@ -12,7 +11,7 @@ var Cursor = require('waterline-cursor');
 var hop = utils.object.hasOwnProperty;
 var SqlString = require('./lib/SqlString');
 var Errors = require('waterline-errors').adapter;
-var md5 = require('md5');
+var Pool = require('generic-pool');
 
 var LOG_QUERIES = false;
 
@@ -80,7 +79,7 @@ module.exports = (function() {
             // drop   => Drop schema and data, then recreate it
             // alter  => Drop/add columns as necessary, but try 
             // safe   => Don't change anything (good for production DBs)
-            migrate: 'drop'
+            migrate: 'safe'
         },
         config: {
         },
@@ -119,34 +118,57 @@ module.exports = (function() {
         },
         //added to match waterline orm
         registerConnection: function(connection, collections, cb) {
-            console.log("Registring connection ...");
+            console.log("Registring connections pool " + connection.identity + "...");
+            
             if (!connection.identity)
                 return cb("Errors.IdentityMissing");
             if (connections[connection.identity])
                 return cb("Errors.IdentityDuplicate");
 
+            var pool = Pool.Pool({
+                name: connection.identity,
+                create: function(callback) {
+                    oracle.connect(marshalConfig(connection), function(err, cnx) {
+                        if (err) {
+                            return callback(err, null);
+                        }
+                        var queries = [];
+                        queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+                        queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+                        queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
+                        queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
+                        async.eachSeries(queries, function(query, end) {
+                            //execute all init queries
+                            cnx.execute(query, [], function(err, results) {
+                                if (err) {
+                                    return callback(err, null); 
+                                }
+                                end();
+                            });
+                        }, function(err) {
+                            if (err) {
+                                return callback(err, null);
+                            }
+                            //all queries passed ok so return oracle connection to pool
+                            callback(null, cnx);
+                        });
+                    });
+                },
+                destroy: function(cnx){
+                    cnx.close();
+                },
+                min: 5,
+                max: 20,
+                idleTimeoutMillis : 30000,
+                log: true
+            });
+
             // Store the connection
             connections[connection.identity] = {
                 config: connection,
                 collections: collections,
-                connection: {}
+                connection: pool
             };
-
-
-            var activeConnection = connections[connection.identity];
-
-            console.log("active connection is: " + connection.identity);
-
-            oracle.connect(activeConnection.config, function(err, connection) {
-                if (err) {
-                    console.log("Error connecting to db:", err);
-                    return;
-                } else {
-
-                    activeConnection.connection = connection;
-                    console.log("Connection registred.");
-                }
-            });
 
             return cb();
         },
@@ -157,7 +179,11 @@ module.exports = (function() {
         // Optional hook fired when a model is unregistered, typically at server halt
         // useful for tearing down remaining open connections, etc.
         teardown: function(connectionName, cb) {
-            console.log("closing connection " + connectionName);
+            console.log("closing connections pool " + connectionName);
+            var pool = connections[connectionName].connection;
+            pool.drain(function() {
+                pool.destroyAllNow();
+            });
             return cb();
         },
         // REQUIRED method if integrating with a schemaful database
@@ -169,12 +195,13 @@ module.exports = (function() {
             console.log("Defining model '" + collectionName + "' ...");
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__DEFINE__, connections[connectionName].config, cb);
+                return spawnConnection(__DEFINE__, connections[connectionName], cb);
             } else {
                 __DEFINE__(connection, cb);
             }
 
             function __DEFINE__(connection, cb) {
+                
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
                 if (!collection) {
@@ -201,14 +228,16 @@ module.exports = (function() {
 
 
                 // Run query
-                /*if (LOG_QUERIES) {
-                 console.log('\nExecuting Oracle query: ', query);
-                 }*/
-                //console.log("Create Query");
+                if (LOG_QUERIES) {
+                    console.log('\nExecuting Oracle query: ', query);
+                }
+
                 console.log(query);
                 connection.execute(query, [], function __DEFINE__(err, result) {
-                    if (err)
+                    if (err) {
+                        console.log(err);
                         return cb(err);
+                    }
                     console.log("Table " + tableName + " created.");
                     // creation des sequence pour les champs autoIncrement
                     Object.keys(definition).forEach(function(columnName) {
@@ -252,7 +281,7 @@ module.exports = (function() {
             console.log('Describing \'' + collectionName + '\' ...');
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__DESCRIBE__, connections[connectionName].config, cb);
+                return spawnConnection(__DESCRIBE__, connections[connectionName], cb);
             } else {
 
                 __DESCRIBE__(connection, cb);
@@ -267,84 +296,65 @@ module.exports = (function() {
                 }
 
                 var tableName = collectionName;
-                
-                /*
+
                 var queries = [];
                 queries[0] = "SELECT COLUMN_NAME, DATA_TYPE, NULLABLE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = '" + tableName.toUpperCase() + "'";
                 queries[1] = "SELECT index_name,COLUMN_NAME FROM user_ind_columns WHERE table_name = '" + tableName.toUpperCase() + "'";
-                */
+                queries[2] = "SELECT cols.table_name, cols.column_name, cols.position, cons.status, cons.owner "
+                        + "FROM all_constraints cons, all_cons_columns cols WHERE cols.table_name = '" + tableName.toUpperCase() 
+                        + "' AND cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner "
+                        + "ORDER BY cols.table_name, cols.position";
                 
-                
-                var columnsListQuery = "select COLUMN_NAME, DATA_TYPE, NULLABLE from USER_TAB_COLUMNS where TABLE_NAME = '" + tableName.toUpperCase() + "'";
-                var indexesQuery = "select index_name,COLUMN_NAME from user_ind_columns where table_name = '" + tableName.toUpperCase() + "'";
-                var primaryKeysQuery = "SELECT cols.table_name, cols.column_name, cols.position, cons.status, cons.owner FROM all_constraints cons, all_cons_columns cols WHERE cols.table_name = '" + tableName.toUpperCase() + "'AND cons.constraint_type = 'P'AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner ORDER BY cols.table_name, cols.position";
-
-                connection.execute(columnsListQuery, [], function __DESCRIBE__(err, schema) {
-
+                async.mapSeries(queries, function(query, callback) {
+                    connection.execute(query, [], callback);
+                }, function(err, results) {
                     if (err) {
-                        console.log("#Error fetching table columns (Describe) " + err.toString() + ".");
                         return cb(err);
                     }
-                    //tester si la table n'existe pas
+                    var schema = results[0];
+                    var indexes = results[1];
+                    var tablePrimaryKeys = results[2];
 
                     if (schema.length === 0) {
                         console.log('Table \'' + collectionName + '\' doesn\'t exist, creating it ...');
                         return cb();
                     }
 
-                    connection.execute(indexesQuery, [], function(err, indexesResult) {
-                        if (err) {
-                            console.log("#Error executing indexes query (Describe) " + err.toString() + ".");
-                            return cb(err);
+                    // Loop through Schema and attach extra attributes
+                    schema.forEach(function(attribute) {
+                        tablePrimaryKeys.forEach(function(pk) {
+                            // Set Primary Key Attribute
+                            if (attribute.COLUMN_NAME === pk.COLUMN_NAME) {
+                                attribute.primaryKey = true;
+                                // If also a number set auto increment attribute
+                                if (attribute.DATA_TYPE === 'NUMBER') {
+                                    attribute.autoIncrement = true;
+                                }
+                            }
+                        });
+                        // Set Unique Attribute
+                        if (attribute.NULLABLE === 'N') {
+                            attribute.required = true;
                         }
 
-                        //retourne la liste des clés primaires
-                        connection.execute(primaryKeysQuery, [], function(err, tablePrimaryKeys) {
-                            if (err) {
-                                console.log("#Error executing primaryKeys query (Describe) " + err.toString() + ".");
-                                return;
+                    });
+                    // Loop Through Indexes and Add Properties
+                    indexes.forEach(function(index) {
+                        schema.forEach(function(attribute) {
+                            if (attribute.COLUMN_NAME === index.COLUMN_NAME)
+                            {
+                                attribute.indexed = true;
                             }
-
-                            // Loop through Schema and attach extra attributes
-                            schema.forEach(function(attr) {
-                                tablePrimaryKeys.forEach(function(pk) {
-                                    // Set Primary Key Attribute
-                                    if (attr.COLUMN_NAME === pk.COLUMN_NAME) {
-                                        attr.primaryKey = true;
-                                        // If also a number set auto increment attribute
-                                        if (attr.DATA_TYPE === 'NUMBER') {
-                                            attr.autoIncrement = true;
-                                        }
-                                    }
-                                });
-                                // Set Unique Attribute
-                                if (attr.NULLABLE === 'N') {
-                                    attr.required = true;
-                                }
-
-                            });
-                            // Loop Through Indexes and Add Properties
-                            indexesResult.forEach(function(result) {
-                                schema.forEach(function(attr) {
-
-                                    if (attr.COLUMN_NAME === result.COLUMN_NAME)
-                                    {
-                                        console.log(attr.COLUMN_NAME + ' is indexed as ' + result.COLUMN_NAME);
-                                        attr.indexed = true;
-
-                                    }
-                                });
-                            });
-                            // Convert mysql format to standard javascript object
-
-                            var normalizedSchema = sql.normalizeSchema(schema, collection.attributes);
-                            // Set Internal Schema Mapping
-                            collection.schema = normalizedSchema;
-                            console.log('Table \'' + collectionName + '\' described.');
-                            // TODO: check that what was returned actually matches the cache
-                            cb(null, normalizedSchema);
                         });
                     });
+                    // Convert mysql format to standard javascript object
+
+                    var normalizedSchema = sql.normalizeSchema(schema, collection.attributes);
+                    // Set Internal Schema Mapping
+                    collection.schema = normalizedSchema;
+                    console.log('Table \'' + collectionName + '\' described.');
+                    // TODO: check that what was returned actually matches the cache
+                    cb(null, normalizedSchema);
                 });
             }
         },
@@ -357,31 +367,22 @@ module.exports = (function() {
             }
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__QUERY__, connections[connectionName].config, cb);
+                return spawnConnection(__QUERY__, connections[connectionName], cb);
             } else {
                 __QUERY__(connection, cb);
             }
 
             function __QUERY__(connection, cb) {
                 console.log('Executing query: ' + query);
+                data = data || [];
                 // Run query
-                if (data)
-                    connection.execute(query, data, function(err, result) {
-                        if (err) {
-                            console.log("#Error executing QUERY " + err.toString() + ".");
-                            return cb(handleQueryError(err));
-                        }
-                        return cb(null, result);
-                    });
-                else
-                    connection.execute(query, [], function(err, result) {
-                        if (err) {
-                            console.log("#Error executing QUERY " + err.toString() + ".");
-                            return cb(handleQueryError(err));
-                        }
-                        return cb(null, result);
-                    });
-
+                connection.execute(query, data, function(err, result) {
+                    if (err) {
+                        console.log("#Error executing QUERY " + err.toString() + ".");
+                        return cb(handleQueryError(err));
+                    }
+                    return cb(null, result);
+                });
             }
         },
         // REQUIRED method if integrating with a schemaful database
@@ -395,7 +396,7 @@ module.exports = (function() {
             }
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__DROP__, connections[connectionName].config, cb);
+                return spawnConnection(__DROP__, connections[connectionName], cb);
             } else {
                 __DROP__(connection, cb);
             }
@@ -406,8 +407,6 @@ module.exports = (function() {
 
                 // Drop any relations
                 function dropTable(item, next) {
-                    var adapter = this;
-                    var collection = connectionObject.collections[item];
                     var tableName = collectionName.toUpperCase();
 
                     // Build query
@@ -434,8 +433,7 @@ module.exports = (function() {
                     if (err)
                         return cb(err);
                     dropTable(collectionName, cb);
-                }
-                );
+                });
             }
         },
         // Optional override of built-in alter logic
@@ -501,10 +499,8 @@ module.exports = (function() {
                 return cb(e);
             }
 
-
-
             if (_.isUndefined(connection)) {
-                return spawnConnection(__QUERY__, connections[connectionName].config, cb);
+                return spawnConnection(__QUERY__, connections[connectionName], cb);
             } else {
                 __QUERY__(connection, cb);
             }
@@ -541,7 +537,7 @@ module.exports = (function() {
         createEach: function(connectionName, collectionName, valuesList, cb, connection) {
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__CREATE_EACH__, connections[connectionName].config, cb);
+                return spawnConnection(__CREATE_EACH__, connections[connectionName], cb);
             } else {
                 __CREATE_EACH__(connection, cb);
             }
@@ -554,7 +550,7 @@ module.exports = (function() {
                 var tableName = collectionName;
 
                 var records = [];
-
+                
                 async.eachSeries(valuesList, function(data, cb) {
 
                     // Prepare values
@@ -578,7 +574,7 @@ module.exports = (function() {
                         if ((_.isUndefined(definition[columnName])) || (_.isUndefined(data[columnName])))
                             delete data[columnName];
                         if (fieldIsDatetime(attribute)) {
-                            data[columnName] = _.isUndefined(data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
+                            data[columnName] = (!data[columnName]) ? 'null' : SqlString.dateField(data[columnName]);
                         }
                     });
 
@@ -645,7 +641,7 @@ module.exports = (function() {
         // (e.g. if this is a find(), not a findAll(), it will only close back a single model)
         find: function(connectionName, collectionName, options, cb, connection) {
             if (_.isUndefined(connection)) {
-                return spawnConnection(__FIND__, connections[connectionName].config, cb);
+                return spawnConnection(__FIND__, connections[connectionName], cb);
             } else {
                 __FIND__(connection, cb);
             }
@@ -702,18 +698,16 @@ module.exports = (function() {
                     return cb(e);
                 }
 				
-				var findQuery = _query.query[0];
+		var findQuery = _query.query[0];
 
                 if (limit && skip) {
-                    var min = skip;
-                    var max = skip + limit;
-                    findQuery = 'SELECT * FROM ('+findQuery+') WHERE LINE_NUMBER > '+min+' and LINE_NUMBER <= '+max;
+                    findQuery = 'SELECT * FROM (' + findQuery + ') WHERE LINE_NUMBER > ' + skip + ' and LINE_NUMBER <= ' + (skip + limit);
                 }
                 else if (limit) {
-                    findQuery = 'SELECT * FROM ('+findQuery+') WHERE LINE_NUMBER <= '+limit;
+                    findQuery = 'SELECT * FROM (' + findQuery + ') WHERE LINE_NUMBER <= ' + limit;
                 }
                 else if (skip) {
-                    findQuery = 'SELECT * FROM ('+findQuery+') WHERE LINE_NUMBER > '+skip;
+                    findQuery = 'SELECT * FROM (' + findQuery + ') WHERE LINE_NUMBER > ' + skip;
                 }
 
 
@@ -737,12 +731,12 @@ module.exports = (function() {
 
 
                     result = processor.synchronizeResultWithModelAndDelete(result, collection.attributes);
+                    
+                    result.forEach(function(data){
+                        delete data['LINE_NUMBER'];
+                    });
 
-                    if (result.length > 0)
-                        cb(null, result);
-                    else
-                        cb(null, null);
-
+                    cb(null, result);
                 });
 
             }
@@ -750,7 +744,7 @@ module.exports = (function() {
         // REQUIRED method if users expect to call Model.update()
         update: function(connectionName, collectionName, options, values, cb, connection) {
             if (_.isUndefined(connection)) {
-                return spawnConnection(__UPDATE__, connections[connectionName].config, cb);
+                return spawnConnection(__UPDATE__, connections[connectionName], cb);
             } else {
                 __UPDATE__(connection, cb);
             }
@@ -840,14 +834,12 @@ module.exports = (function() {
                             console.log('#Error executing Update ' + err.toString() + '.');
                             return cb(handleQueryError(err));
                         }
-                        var criteria;
-                        if (ids.length === 1) {
-                            //criteria = {where: {}, limit: 1};
-                            criteria = {where: {}};
+                        
+                        var criteria = {where: {}};
+                        
+                        if (ids.length === 1) {   
                             criteria.where[pk] = ids[0];
-                            criteria.where['ROWNUM'] = 1;
                         } else {
-                            criteria = {where: {}};
                             criteria.where[pk] = ids;
                         }
 
@@ -857,10 +849,15 @@ module.exports = (function() {
                         } catch (e) {
                             return cb(e);
                         }
+                        
+                        var findQuery =  _query.query[0];
+                        
+                        if(ids.length === 1){
+                            findQuery = 'SELECT * FROM (' + findQuery + ') WHERE LINE_NUMBER = 1';
+                        }
 
                         // Run query
-                        console.log('*', _query.query[0]);
-                        connection.execute(_query.query[0], [], function(err, result) {
+                        connection.execute(findQuery, [], function(err, result) {
 
                             //check if identity was a reserved keyword
                             if (reserved) {
@@ -887,7 +884,7 @@ module.exports = (function() {
 
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__DESTROY__, connections[connectionName].config, cb);
+                return spawnConnection(__DESTROY__, connections[connectionName], cb);
             } else {
                 __DESTROY__(connection, cb);
             }
@@ -950,7 +947,7 @@ module.exports = (function() {
         stream: function(connectionName, collectionName, options, stream, connection) {
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__STREAM__, connections[connectionName].config);
+                return spawnConnection(__STREAM__, connections[connectionName]);
             } else {
                 __STREAM__(connection);
             }
@@ -995,7 +992,7 @@ module.exports = (function() {
         addAttribute: function(connectionName, collectionName, attrName, attrDef, cb, connection) {
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__ADD_ATTRIBUTE__, connections[connectionName].config, cb);
+                return spawnConnection(__ADD_ATTRIBUTE__, connections[connectionName], cb);
             } else {
                 __ADD_ATTRIBUTE__(connection, cb);
             }
@@ -1027,6 +1024,7 @@ module.exports = (function() {
         removeAttribute: function(connectionName, collectionName, attrName, cb, connection) {
 
             if (_.isUndefined(connection)) {
+                //LOOK LIKE MALFORMED
                 return spawnConnection(connectionName, __REMOVE_ATTRIBUTE__, cb);
             } else {
                 __REMOVE_ATTRIBUTE__(connection, cb);
@@ -1058,7 +1056,7 @@ module.exports = (function() {
         count: function(connectionName, collectionName, options, cb, connection) {
 
             if (_.isUndefined(connection)) {
-                return spawnConnection(__COUNT__, connections[connectionName].config, cb);
+                return spawnConnection(__COUNT__, connections[connectionName], cb);
             } else {
                 __COUNT__(connection, cb);
             }
@@ -1101,7 +1099,7 @@ module.exports = (function() {
         join: function(connectionName, collectionName, options, cb, connection) {
             console.log('Joining \'' + collectionName + '\' ...');
             if (_.isUndefined(connection)) {
-                return spawnConnection(__JOIN__, connections[connectionName].config, cb);
+                return spawnConnection(__JOIN__, connections[connectionName], cb);
             } else {
                 __JOIN__(connection, cb);
             }
@@ -1561,87 +1559,24 @@ module.exports = (function() {
     // Wrap a function in the logic necessary to provision a connection
     // (either grab a free connection from the pool or create a new one)
     // cb is optional (you might be streaming)
-    function spawnConnection(logic, config, cb) {
-
-
-        // Use a new connection each time
-        //if (!config.pool) {
-        oracle.connect(marshalConfig(config), function(err, connection) {
-            afterwards(err, connection);
-        });
-        //}
-
-        // Use connection pooling
-        //else {
-        // adapter.pool.getConnection(afterwards);
-        //}
-
-        // Run logic using connection, then release/close it
-
-        function afterwards(err, connection) {
-            if (err) {
-                console.error("Error spawning oracle connection:");
-                console.error(err);
-                if (connection)
-                    connection.close();
-                return cb(err);
-            }
-
-
-            // console.log("Provisioned new connection.");
-            // handleDisconnect(connection, config);
-            // "ALTER SESSION SET nls_date_Format = 'YYYY-MM-DD:HH24:MI:SS'"
-            var queries = [];
-            queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
-            queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
-            queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
-            queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
-            async.eachSeries(queries, function(query, callback) {
-                connection.execute(query, [], function(err, results) {
-                    callback();
-                });
-            }, function(err) {
-                logic(connection, function(err, result) {
-
-                    if (err) {
-                        cb(err, 1);
-                        console.log("Logic error in Oracle ORM.");
-                        console.log(err);
-                        connection.close();
-                        return;
-                    }
-
-                    connection.close();
-                    cb(err, result);
-                });
+    function spawnConnection(logic, connection, cb) {
+        var pool = connection.connection;
+        pool.acquire(function(err, cnx) {
+            logic(cnx, function(err, result) {
+                if (err) {
+                    cb(err, 1);
+                    console.log("Logic error in Oracle ORM.");
+                    console.log(err);
+                    return pool.release(cnx);
+                }
+                pool.release(cnx);
+                cb(err, result);
             });
-        }
-    }
-
-    function handleDisconnect(connection, config) {
-        connection.on('error', function(err) {
-            // if (!err.fatal) {
-            //  return;
-            // }
-
-            if (!err || err.code !== 'PROTOCOL_CONNECTION_LOST') {
-                // throw err;
-            }
-
-            console.error('Re-connecting lost connection: ' + err.stack);
-            console.error(err);
-
-
-            connection = mysql.createConnection(marshalConfig(config));
-            connection.connect();
-            // connection = mysql.createConnection(connection.config);
-            // handleDisconnect(connection);
-            // connection.connect();
         });
     }
 
     // Convert standard adapter config
-    // into a custom configuration object for node-mysql
+    // into a custom configuration object for node-oracle
     function marshalConfig(config) {
         return {
             tns: config.tns,
