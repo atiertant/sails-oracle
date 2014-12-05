@@ -1,6 +1,6 @@
 {
   "name": "sails-oracledb",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Oracle Database adapter for Sails.js",
   "main": "index.js",
   "scripts": {
