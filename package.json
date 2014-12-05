@@ -1,6 +1,6 @@
 {
   "name": "sails-oracledb",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Oracle Database adapter for Sails.js",
   "main": "index.js",
   "scripts": {
@@ -42,7 +42,8 @@
     "waterlineVersion": "~0.10.0",
     "interfaces": [
       "semantic",
-      "queryable"
+      "queryable",
+      "associations"
     ]
   },
   "readme": "![image_squidhome@2x.png](http://i.imgur.com/RIvu9.png) \n\n# Oracle Database Adapter for Sails Application.\n",

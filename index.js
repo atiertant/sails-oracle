@@ -161,7 +161,7 @@ module.exports = (function() {
                 min: 5,
                 max: 20,
                 idleTimeoutMillis : 30000,
-                log: true
+                log: false
             });
 
             // Store the connection
@@ -208,19 +208,8 @@ module.exports = (function() {
                 if (!collection) {
                     return cb(util.format('Unknown collection `%s` in connection `%s`', collectionName, connectionName));
                 }
-                // var tableName = SqlString.escapeId(collectionName);
-                var tableName = collectionName;
-                if (sql.isKeyword(tableName)) {
-                    var tableName = collectionName.toUpperCase();
-                }
-                // Iterate through each attribute, building a query string
 
-                /*_.keys(definition).forEach(function(columnName) {
-                    if (sql.isKeyword(columnName)) {
-                        definition['RESERVED_' + columnName] = definition[columnName];
-                        delete definition[columnName];
-                    }
-                });*/
+                var tableName = collectionName;
 
                 var schema = sql.schema(tableName, definition);
 
@@ -257,7 +246,7 @@ module.exports = (function() {
                             //init autoIncrement values
                             self.autoIncrements[tableName] = self.autoIncrements[tableName] || [];
                             self.autoIncrements[tableName][columnName] = 1;
-                            var autoIncrementQuery = 'SELECT MAX(' + columnName + ') AS MAX FROM "' + tableName + '"';
+                            var autoIncrementQuery = 'SELECT MAX("' + columnName + '") AS MAX FROM "' + tableName + '"';
                             connection.execute(autoIncrementQuery, [], function(err, autoInc) {
                                 if (err) {
                                     console.log("could not get last autoIncrement value");
@@ -320,6 +309,7 @@ module.exports = (function() {
                     connection.execute(query, [], callback);
                 }, function(err, results) {
                     if (err) {
+                        console.log(err);
                         return cb(err);
                     }
                     var schema = results[0];
@@ -724,10 +714,6 @@ module.exports = (function() {
 
                     result = processor.synchronizeResultWithModel(result, collection.attributes);
                     
-                    result.forEach(function(data){
-                        delete data['LINE_NUMBER'];
-                    });
-
                     cb(null, result);
                 });
 
@@ -901,7 +887,7 @@ module.exports = (function() {
         },
         // REQUIRED method if users expect to call Model.stream()
         stream: function(connectionName, collectionName, options, stream, connection) {
-
+            console.log('stream');
             if (_.isUndefined(connection)) {
                 return spawnConnection(__STREAM__, connections[connectionName]);
             } else {
@@ -946,7 +932,7 @@ module.exports = (function() {
             }
         },
         addAttribute: function(connectionName, collectionName, attrName, attrDef, cb, connection) {
-
+            console.log('addAttribute');
             if (_.isUndefined(connection)) {
                 return spawnConnection(__ADD_ATTRIBUTE__, connections[connectionName], cb);
             } else {
@@ -978,7 +964,7 @@ module.exports = (function() {
             }
         },
         removeAttribute: function(connectionName, collectionName, attrName, cb, connection) {
-
+            console.log('removeAttribute');
             if (_.isUndefined(connection)) {
                 //LOOK LIKE MALFORMED
                 return spawnConnection(connectionName, __REMOVE_ATTRIBUTE__, cb);
@@ -1010,7 +996,7 @@ module.exports = (function() {
             }
         },
         count: function(connectionName, collectionName, options, cb, connection) {
-
+            console.log('count');
             if (_.isUndefined(connection)) {
                 return spawnConnection(__COUNT__, connections[connectionName], cb);
             } else {
@@ -1071,7 +1057,7 @@ module.exports = (function() {
                      * Find some records directly (using only this adapter)
                      * from the specified collection.
                      *
-                     * @param  {String}   collectionIdentity
+                     * @param  {String}   collectionName
                      * @param  {Object}   criteria
                      * @param  {Function} _cb
                      */
@@ -1082,7 +1068,7 @@ module.exports = (function() {
                      * Look up the name of the primary key field
                      * for the collection with the specified identity.
                      *
-                     * @param  {String}   collectionIdentity
+                     * @param  {String}   collectionName
                      * @return {String}
                      */
                     $getPK: function(collectionName) {
@@ -1125,28 +1111,31 @@ module.exports = (function() {
                         try {
 
                             _query = sequel.find(collectionName, instructions);
-                            //console.log('firstQuery',_query);
+                            console.log("_query:");
+                            console.log(_query);
                         } catch (e) {
                             return next(e);
                         }
 
                         async.auto({
                             processParent: function(next) {
-                                console.log('Executing : ', _query.query[0]);
-                                client.execute(_query.query[0], [], function __FIND__(err, result) {
+                                console.log("processParent find:");
+                                adapter.find(connectionName, collectionName, instructions, function __FIND__(err, result) {
+                                //client.execute(_query.query[0], [], function __FIND__(err, result) {
                                     if (err) {
                                         console.log('#Error fetching parent \'' + collectionName + '\' rows (Join) ' + err.toString() + '.');
                                         return next(err);
                                     }
                                     var attrs = collection.attributes;
-                                    result = processor.synchronizeResultWithModel(result, attrs);
+                                    //result = processor.synchronizeResultWithModel(result, attrs);
+                                    
                                     parentRecords = result;
 
                                     var splitChildren = function(parent, next) {
                                         var cache = {};
 
                                         _.keys(parent).forEach(function(key) {
-
+                                            console.log(key);
                                             // Check if we can split this on our special alias identifier '___' and if
                                             // so put the result in the cache
                                             var split = key.split('___');
@@ -1179,19 +1168,20 @@ module.exports = (function() {
                                         buffers.parents = parentRecords;
                                         next();
                                     });
-                                });
+                                },client);
                             },
                             // Build child buffers.
                             // For each instruction, loop through the parent records and build up a
                             // buffer for the record.
                             buildChildBuffers: ['processParent', function(next, results) {
+                                    console.log('buildChildBuffers:');
                                     async.each(_.keys(instructions.instructions), function(population, nextPop) {
                                         var populationObject = instructions.instructions[population];
                                         //console.log('-' + population, populationObject);
                                         var popInstructions = populationObject.instructions;
                                         //var pk = _getPK(connectionName, popInstructions[0].parent).toUpperCase();
                                         var pk = _getPK(connectionName, popInstructions[0].parent);
-                                        var modelPk = _getModelPK(connectionName, popInstructions[0].parent, pk);
+                                        //var modelPk = _getModelPK(connectionName, popInstructions[0].parent, pk);
                                         //console.log('pk :' , pk , 'modelPk ', modelPk)  ;  
 
                                         var alias = populationObject.strategy.strategy === 1 ? popInstructions[0].parentKey : popInstructions[0].alias;
@@ -1200,20 +1190,22 @@ module.exports = (function() {
                                         async.eachSeries(parentRecords, function(parent, nextParent) {
                                             var buffer = {
                                                 attrName: population,
-                                                parentPK: /*parent[pk],*/parent[modelPk],
-                                                pkAttr: /*pk,*/ modelPk,
+                                                //parentPK: /*parent[pk],*/parent[modelPk],
+                                                //pkAttr: /*pk,*/ modelPk,
+                                                parentPK: parent[pk],
+                                                pkAttr: pk,
                                                 keyName: alias
                                             };
 
                                             var records = [];
                                             //console.log('cached children', cachedChildren);
                                             // Check for any cached parent records
-                                            //console.log(cachedChildren,alias);
-                                            if (hop(cachedChildren, alias.toUpperCase())) {
+                                            console.log(cachedChildren,alias);
+                                            if (hop(cachedChildren, alias)) {
 
-                                                cachedChildren[alias.toUpperCase()].forEach(function(cachedChild) {
-                                                    var childVal = popInstructions[0].childKey.toUpperCase();
-                                                    var parentVal = popInstructions[0].parentKey.toUpperCase();
+                                                cachedChildren[alias].forEach(function(cachedChild) {
+                                                    var childVal = popInstructions[0].childKey;
+                                                    var parentVal = popInstructions[0].parentKey;
                                                     //console.log(childVal+' must be equal to '+parentVal);
                                                     if (cachedChild[childVal] !== parent[parentVal]) {
                                                         return;
@@ -1231,6 +1223,7 @@ module.exports = (function() {
                                             var childCollection = popInstructions[0].child;
                                             var attrs = connections[connectionName].collections[childCollection].attributes;
                                             records = processor.synchronizeResultWithModel(records, attrs);
+
                                             if (records.length > 0) {
                                                 buffer.records = records;
                                             }
@@ -1244,20 +1237,22 @@ module.exports = (function() {
 
                                     // Remove the parent query
                                     _query.query.shift();
+                                    console.log("_query.query.shift()");
+                                    console.log(_query);
 
                                     //console.log('_query.query', _query.query);
                                     async.each(_query.query, function(q, next) {
-
+                                        console.log("makng union");
                                         var childCollection = q.instructions.child;
                                         var qs = '';
                                         var pk;
                                         var modelPk;
                                         if (!Array.isArray(q.instructions)) {
-                                            pk = _getPK(connectionName, q.instructions.parent).toUpperCase();
+                                            pk = _getPK(connectionName, q.instructions.parent);
                                             modelPk = _getModelPK(connectionName, q.instructions.parent, pk);
                                         }
                                         else if (q.instructions.length > 1) {
-                                            pk = _getPK(connectionName, q.instructions[0].parent).toUpperCase();
+                                            pk = _getPK(connectionName, q.instructions[0].parent);
                                             modelPk = _getModelPK(connectionName, q.instructions[0].parent, pk);
                                         }
                                         //console.log('PK', pk);
@@ -1320,16 +1315,16 @@ module.exports = (function() {
                                             result.forEach(function(row) {
 
                                                 if (!Array.isArray(q.instructions)) {
-                                                    if (!hop(groupedRecords, row[q.instructions.childKey.toUpperCase()])) {
-                                                        groupedRecords[row[q.instructions.childKey.toUpperCase()]] = [];
+                                                    if (!hop(groupedRecords, row[q.instructions.childKey])) {
+                                                        groupedRecords[row[q.instructions.childKey]] = [];
                                                     }
                                                     //console.log('row',row,'ch',q.instructions.childKey);
-                                                    groupedRecords[row[q.instructions.childKey.toUpperCase()]].push(row);
+                                                    groupedRecords[row[q.instructions.childKey]].push(row);
                                                 }
                                                 else {
 
                                                     // Grab the special "foreign key" we attach and make sure to remove it
-                                                    var fk = '___' + q.instructions[0].childKey.toUpperCase();
+                                                    var fk = '___' + q.instructions[0].childKey;
 
                                                     if (!hop(groupedRecords, row[fk])) {
                                                         groupedRecords[row[fk]] = [];
