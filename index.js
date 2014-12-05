@@ -25,10 +25,10 @@ module.exports = (function() {
     var sqlOptions = {
         parameterized: false,
         caseSensitive: false,
-        escapeCharacter: '',
+        escapeCharacter: '"',
         casting: false,
         canReturnValues: false,
-        escapeInserts: false,
+        escapeInserts: true,
         declareDeleteAlias: false,
         explicitTableAs: false,
         prefixAlias: 'alias__',
@@ -107,6 +107,7 @@ module.exports = (function() {
             }
             // Set the primaryKey on the definition object
             def.primaryKey = pkName;
+
 
             // Store the definition for the model identity
             if (dbs[key])
@@ -209,12 +210,22 @@ module.exports = (function() {
                 }
                 // var tableName = SqlString.escapeId(collectionName);
                 var tableName = collectionName;
+                if (sql.isKeyword(tableName)) {
+                    var tableName = collectionName.toUpperCase();
+                }
                 // Iterate through each attribute, building a query string
+
+                /*_.keys(definition).forEach(function(columnName) {
+                    if (sql.isKeyword(columnName)) {
+                        definition['RESERVED_' + columnName] = definition[columnName];
+                        delete definition[columnName];
+                    }
+                });*/
 
                 var schema = sql.schema(tableName, definition);
 
                 // Build query
-                var query = 'CREATE TABLE ' + tableName + ' (' + schema + ')';
+                var query = 'CREATE TABLE "' + tableName + '" (' + schema + ')';
 
                 if (connectionObject.config.charset) {
                     query += ' DEFAULT CHARSET ' + connectionObject.config.charset;
@@ -246,7 +257,7 @@ module.exports = (function() {
                             //init autoIncrement values
                             self.autoIncrements[tableName] = self.autoIncrements[tableName] || [];
                             self.autoIncrements[tableName][columnName] = 1;
-                            var autoIncrementQuery = "SELECT MAX(" + columnName + ") AS MAX FROM " + tableName;
+                            var autoIncrementQuery = 'SELECT MAX(' + columnName + ') AS MAX FROM "' + tableName + '"';
                             connection.execute(autoIncrementQuery, [], function(err, autoInc) {
                                 if (err) {
                                     console.log("could not get last autoIncrement value");
@@ -298,10 +309,10 @@ module.exports = (function() {
                 var tableName = collectionName;
 
                 var queries = [];
-                queries[0] = "SELECT COLUMN_NAME, DATA_TYPE, NULLABLE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = '" + tableName.toUpperCase() + "'";
-                queries[1] = "SELECT index_name,COLUMN_NAME FROM user_ind_columns WHERE table_name = '" + tableName.toUpperCase() + "'";
+                queries[0] = "SELECT COLUMN_NAME, DATA_TYPE, NULLABLE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = '" + tableName + "'";
+                queries[1] = "SELECT index_name,COLUMN_NAME FROM user_ind_columns WHERE table_name = '" + tableName + "'";
                 queries[2] = "SELECT cols.table_name, cols.column_name, cols.position, cons.status, cons.owner "
-                        + "FROM all_constraints cons, all_cons_columns cols WHERE cols.table_name = '" + tableName.toUpperCase() 
+                        + "FROM all_constraints cons, all_cons_columns cols WHERE cols.table_name = '" + tableName 
                         + "' AND cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner "
                         + "ORDER BY cols.table_name, cols.position";
                 
@@ -407,10 +418,10 @@ module.exports = (function() {
 
                 // Drop any relations
                 function dropTable(item, next) {
-                    var tableName = collectionName.toUpperCase();
+                    var tableName = collectionName;
 
                     // Build query
-                    var query = 'DROP TABLE ' + tableName.toUpperCase();
+                    var query = 'DROP TABLE "' + tableName + '"';
 
                     // Run query
                     console.log('Executing : ' + query);
@@ -660,18 +671,6 @@ module.exports = (function() {
 
                 // Build find query
                 var schema = collection.waterline.schema;
-
-                //check if identity is a reserved keyword
-                var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
-                var reserved = sql.isKeyword(identity);
-                if (reserved) {
-                    var escapedIdentity = 'RESERVED_' + identity;
-                    schema[escapedIdentity] = schema[identity];
-                    delete schema[identity];
-                    schema[escapedIdentity].identity = escapedIdentity;
-                }
-
-
                 var processor = new Processor();
                 var _query;
                 var sequel = new Sequel(schema, sqlOptions);
@@ -717,20 +716,13 @@ module.exports = (function() {
                 }
                 console.log('Executing : ' + _query.query[0]);
                 connection.execute(findQuery, [], function(err, result) {
-                    //check if identity was a reserved keyword
-                    if (reserved) {
-                        schema[identity] = schema[escapedIdentity];
-                        delete schema[escapedIdentity];
-                        schema[identity].identity = identity;
-                    }
-
                     if (err) {
                         console.log('#Error executing Find ' + err.toString() + '.');
                         return cb(err);
                     }
 
 
-                    result = processor.synchronizeResultWithModelAndDelete(result, collection.attributes);
+                    result = processor.synchronizeResultWithModel(result, collection.attributes);
                     
                     result.forEach(function(data){
                         delete data['LINE_NUMBER'];
@@ -757,17 +749,6 @@ module.exports = (function() {
                 // Build find query
                 var schema = collection.waterline.schema;
                 var _query;
-
-                //check if identity is a reserved keyword
-                var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
-                var reserved = sql.isKeyword(identity);
-                if (reserved) {
-                    var escapedIdentity = 'RESERVED_' + identity;
-                    schema[escapedIdentity] = schema[identity];
-                    delete schema[identity];
-                    schema[escapedIdentity].identity = escapedIdentity;
-                }
-
                 var sequel = new Sequel(schema, sqlOptions);
 
                 // Build a query for the specific query strategy
@@ -797,7 +778,8 @@ module.exports = (function() {
                     }
 
                     results.forEach(function(result) {
-                        ids.push(result[pk.toUpperCase()]);
+                        //ids.push(result[pk.toUpperCase()]);
+                        ids.push(result[pk]);
                     });
 
                     // Prepare values
@@ -858,14 +840,6 @@ module.exports = (function() {
 
                         // Run query
                         connection.execute(findQuery, [], function(err, result) {
-
-                            //check if identity was a reserved keyword
-                            if (reserved) {
-                                schema[identity] = schema[escapedIdentity];
-                                delete schema[escapedIdentity];
-                                schema[identity].identity = identity;
-                            }
-
                             if (err) {
                                 console.log("#Error executing Find_2 (Update) " + err.toString() + ".");
                                 return cb(err);
@@ -898,17 +872,6 @@ module.exports = (function() {
                 // Build query
                 var schema = collection.waterline.schema;
                 var _query;
-
-                //check if identity is a reserved keyword
-                var identity = _.findWhere(_.values(schema), {tableName: collectionName}).identity;
-                var reserved = sql.isKeyword(identity);
-                if (reserved) {
-                    var escapedIdentity = 'RESERVED_' + identity;
-                    schema[escapedIdentity] = schema[identity];
-                    delete schema[identity];
-                    schema[escapedIdentity].identity = escapedIdentity;
-                }
-
                 var sequel = new Sequel(schema, sqlOptions);
 
                 // Build a query for the specific query strategy
@@ -928,13 +891,6 @@ module.exports = (function() {
                         }]
                 },
                 function(err, results) {
-                    //check if identity was a reserved keyword
-                    if (reserved) {
-                        schema[identity] = schema[escapedIdentity];
-                        delete schema[escapedIdentity];
-                        schema[identity].identity = identity;
-                    }
-
                     if (err)
                         return cb(err);
 
@@ -1233,7 +1189,8 @@ module.exports = (function() {
                                         var populationObject = instructions.instructions[population];
                                         //console.log('-' + population, populationObject);
                                         var popInstructions = populationObject.instructions;
-                                        var pk = _getPK(connectionName, popInstructions[0].parent).toUpperCase();
+                                        //var pk = _getPK(connectionName, popInstructions[0].parent).toUpperCase();
+                                        var pk = _getPK(connectionName, popInstructions[0].parent);
                                         var modelPk = _getModelPK(connectionName, popInstructions[0].parent, pk);
                                         //console.log('pk :' , pk , 'modelPk ', modelPk)  ;  
 
@@ -1528,8 +1485,10 @@ module.exports = (function() {
             var modelPk;
             Object.keys(attributes).forEach(function(key) {
                 var columnName = attributes[key].columnName || key;
-                if (columnName.toUpperCase() === pk)
+                if (columnName === pk) {
+                //if (columnName.toUpperCase() === pk) {    
                     modelPk = key;
+                }
                 return;
             });
             return modelPk;
