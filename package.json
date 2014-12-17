@@ -1,6 +1,6 @@
 {
   "name": "sails-oracledb",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Oracle Database adapter for Sails.js",
   "main": "index.js",
   "scripts": {
@@ -25,7 +25,7 @@
   "readmeFilename": "README.md",
   "dependencies": {
     "oracle": "0.3.7",
-    "async": "~0.9.0",
+    "asynk": ">=0.0.3",
     "underscore": "~1.4.3",
     "underscore.string": "~2.3.1",
     "waterline-errors": "~0.10.0",
