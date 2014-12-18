@@ -14,6 +14,7 @@ var Errors = require('waterline-errors').adapter;
 var Pool = require('generic-pool');
 
 var LOG_QUERIES = false;
+var LOG_ERRORS = false;
 
 module.exports = (function() {
 
@@ -173,17 +174,8 @@ module.exports = (function() {
         // REQUIRED method if integrating with a schemaful database
         define: function(connectionName, collectionName, definition, cb, connection) {
 
-
             // Define a new "table" or "collection" schema in the data store
             var self = this;
-
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__DEFINE__, connections[connectionName], cb);
-            } else {
-                __DEFINE__(connection, cb);
-            }
-
-            function __DEFINE__(connection, cb) {
                 
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
@@ -213,9 +205,11 @@ module.exports = (function() {
                 if (LOG_QUERIES) {
                     console.log('Executing DEFINE query: ', query);
                 }
-                connection.execute(query, [], function __DEFINE__(err, result) {
+                execQuery(connections[connectionName],query, [], function __DEFINE__(err, result) {
                     if (err) {
-                        console.log(err);
+                        if (LOG_ERRORS) {
+                            console.log(err);
+                        }
                         return cb(err);
                     }
                     // creation des sequence pour les champs autoIncrement
@@ -226,10 +220,12 @@ module.exports = (function() {
                             self.autoIncrements[tableName] = self.autoIncrements[tableName] || [];
                             self.autoIncrements[tableName][columnName] = 1;
                             var autoIncrementQuery = 'SELECT MAX("' + columnName + '") AS MAX FROM "' + tableName + '"';
-                            connection.execute(autoIncrementQuery, [], function(err, autoInc) {
+                            execQuery(connections[connectionName],autoIncrementQuery, [], function(err, autoInc) {
                                 if (err) {
-                                    console.log("could not get last autoIncrement value");
-                                    return;
+                                    if (LOG_ERRORS) {
+                                        console.log("could not get last autoIncrement value: ",err);
+                                    }
+                                    return cb(err);
                                 }
                                 self.autoIncrements[tableName][columnName] = autoInc[0]['MAX'] || 1;
                             });
@@ -246,8 +242,6 @@ module.exports = (function() {
                     });
                 });
 
-
-            }
         },
         // REQUIRED method if integrating with a schemaful database
         /* describe: function(collectionName, cb) {
@@ -257,14 +251,6 @@ module.exports = (function() {
          cb(null, attributes);
          },*/
         describe: function(connectionName, collectionName, cb, connection) {
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__DESCRIBE__, connections[connectionName], cb);
-            } else {
-
-                __DESCRIBE__(connection, cb);
-            }
-
-            function __DESCRIBE__(connection, cb) {
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
 
@@ -282,9 +268,11 @@ module.exports = (function() {
                         + "' AND cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner "
                         + "ORDER BY cols.table_name, cols.position";
                 
-                asynk.each(queries,(connection.execute).bind(connection)).args(asynk.item,[],asynk.callback).serie(function(err, results) {
+                asynk.each(queries,execQuery).args(connectionObject,asynk.item,[],asynk.callback).parallel(function(err, results) {
                     if (err) {
-                        console.log(err);
+                        if (LOG_ERRORS) {
+                            console.log(err);
+                        }
                         return cb(err);
                     }
                     var schema = results[0];
@@ -330,7 +318,6 @@ module.exports = (function() {
                     // TODO: check that what was returned actually matches the cache
                     cb(null, normalizedSchema);
                 },[null,asynk.data('all')]);
-            }
         },
         // Direct access to query
         query: function(connectionName, collectionName, query, data, cb, connection) {
@@ -340,26 +327,20 @@ module.exports = (function() {
                 data = null;
             }
 
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__QUERY__, connections[connectionName], cb);
-            } else {
-                __QUERY__(connection, cb);
-            }
-
-            function __QUERY__(connection, cb) {
                 if (LOG_QUERIES) {
                     console.log('Executing QUERY query: ' + query);
                 }
                 data = data || [];
                 // Run query
-                connection.execute(query, data, function(err, result) {
+                execQuery(connections[connectionName],query, data, function(err, result) {
                     if (err) {
-                        console.log("#Error executing QUERY " + err.toString() + ".");
+                        if (LOG_ERRORS) {
+                            console.log("#Error executing QUERY " + err.toString() + ".");
+                        }
                         return cb(handleQueryError(err));
                     }
                     return cb(null, result);
                 });
-            }
         },
         // REQUIRED method if integrating with a schemaful database
         drop: function(connectionName, collectionName, relations, cb, connection) {
@@ -370,14 +351,6 @@ module.exports = (function() {
                 cb = relations;
                 relations = [];
             }
-
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__DROP__, connections[connectionName], cb);
-            } else {
-                __DROP__(connection, cb);
-            }
-
-            function __DROP__(connection, cb) {
 
                 var connectionObject = connections[connectionName];
 
@@ -392,9 +365,12 @@ module.exports = (function() {
                     if (LOG_QUERIES){
                         console.log('Executing DROP query: ' + query);
                     }
-                    connection.execute(query, [], function __DROP__(err, result) {
+                    
+                    execQuery(connections[connectionName],query, [], function __DROP__(err, result) {
                         if (err) {
-                            console.log("#Error executing DROP " + err.toString() + ".");
+                            if (LOG_ERRORS) {
+                                console.log("#Error executing DROP " + err.toString() + ".");
+                            }
                             if (err.code !== 'ER_BAD_TABLE_ERROR' && err.code !== 'ER_NO_SUCH_TABLE')
                                 return next(err);
                             result = null;
@@ -405,12 +381,11 @@ module.exports = (function() {
                         next(null, result);
                     });
                 }
-                asynk.each(relations,dropTable).args(asynk.item,asynk.callback).serie(function(err) {
+                asynk.each(relations,dropTable).args(asynk.item,asynk.callback).parallel(function(err) {
                     if (err)
                         return cb(err);
                     dropTable(collectionName, cb);
                 },[null]);
-            }
         },
         createCallbackQueue: [],
         // Optional override of built-in alter logic
@@ -483,21 +458,16 @@ module.exports = (function() {
                 return cb(e);
             }
 
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__QUERY__, connections[connectionName], cb);
-            } else {
-                __QUERY__(connection, cb);
-            }
-
-            function __QUERY__(connection, cb) {
 
                 // Run query
                 if (LOG_QUERIES) {
                     console.log('Executing CREATE query: ' + _query.query);
                 }
-                connection.execute(_query.query, [], function(err, result) {
+                execQuery(connections[connectionName],_query.query, [], function(err, result) {
                     if (err) {
-                        console.log("#Error executing CREATE " + err.toString() + ".");
+                        if (LOG_ERRORS) {
+                            console.log("#Error executing CREATE " + err.toString() + ".");
+                        }
                         return cb(handleQueryError(err));
                     }
                     // Build model to return
@@ -530,20 +500,10 @@ module.exports = (function() {
                     }
 
                 });
-            }
         },
         // Override of createEach to share a single connection
         // instead of using a separate connection for each request
         createEach: function(connectionName, collectionName, valuesList, cb, connection) {
-
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__CREATE_EACH__, connections[connectionName], cb);
-            } else {
-                __CREATE_EACH__(connection, cb);
-            }
-
-
-            function __CREATE_EACH__(connection, cb) {
 
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
@@ -594,15 +554,17 @@ module.exports = (function() {
                     if (LOG_QUERIES) {
                         console.log('Executing CREATE_EACH : ' + _query.query);
                     }
-                    connection.execute(_query.query, [], function(err, results) {
+                    execQuery(connections[connectionName],_query.query, [], function(err, results) {
                         if (err) {
-                            console.log("#Error executing Create (CreateEach) " + err.toString() + ".");
+                            if (LOG_ERRORS) {
+                                console.log("#Error executing Create (CreateEach) " + err.toString() + ".");
+                            }
                             return cb(handleQueryError(err));
                         }
                         records.push(results.insertId);
                         cb();
                     });
-                }).args(asynk.item,asynk.callback).serie(function(err) {
+                }).args(asynk.item,asynk.callback).parallel(function(err) {
                     if (err)
                         return cb(err);
 
@@ -631,22 +593,12 @@ module.exports = (function() {
                      });*/
                     cb(null, null);
                 }[null]);
-            }
-        }
-        ,
+        },
         // REQUIRED method if users expect to call Model.find(), Model.findAll() or related methods
         // You're actually supporting find(), findAll(), and other methods here
         // but the core will take care of supporting all the different usages.
         // (e.g. if this is a find(), not a findAll(), it will only close back a single model)
         find: function(connectionName, collectionName, options, cb, connection) {
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__FIND__, connections[connectionName], cb);
-            } else {
-                __FIND__(connection, cb);
-            }
-
-            function __FIND__(connection, cb) {
-
                 // Check if this is an aggregate query and that there is something to return
                 if (options.groupBy || options.sum || options.average || options.min || options.max) {
                     if (!options.sum && !options.average && !options.min && !options.max) {
@@ -702,9 +654,11 @@ module.exports = (function() {
                 if (LOG_QUERIES) {
                     console.log('Executing FIND query: ' + _query.query[0]);
                 }
-                connection.execute(findQuery, [], function(err, result) {
+                execQuery(connections[connectionName],findQuery, [], function(err, result) {
                     if (err) {
-                        console.log('#Error executing Find ' + err.toString() + '.');
+                        if (LOG_ERRORS) {
+                            console.log('#Error executing Find ' + err.toString() + '.');
+                        }
                         return cb(err);
                     }
 
@@ -713,18 +667,9 @@ module.exports = (function() {
                     
                     cb(null, result);
                 });
-
-            }
         },
         // REQUIRED method if users expect to call Model.update()
         update: function(connectionName, collectionName, options, values, cb, connection) {
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__UPDATE__, connections[connectionName], cb);
-            } else {
-                __UPDATE__(connection, cb);
-            }
-
-            function __UPDATE__(connection, cb) {
                 var processor = new Processor();
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
@@ -742,9 +687,11 @@ module.exports = (function() {
                     return cb(e);
                 }
 
-                connection.execute(_query.query[0], [], function(err, results) {
+                execQuery(connections[connectionName],_query.query[0], [], function(err, results) {
                     if (err) {
-                        console.log("#Error executing Find_1 (Update) " + err.toString() + ".");
+                        if (LOG_ERRORS) {
+                            console.log("#Error executing Find_1 (Update) " + err.toString() + ".");
+                        }
                         return cb(err);
                     }
                     var ids = [];
@@ -783,7 +730,6 @@ module.exports = (function() {
                         }
                         else if (fieldIsBoolean(column)) {
                             values[columnName] = (values[columnName]) ? 1 : 0;
-                            console.log(columnName + " = " + values[columnName]);
                         }
                     });
                     // Build query
@@ -796,9 +742,11 @@ module.exports = (function() {
                         console.log('Executing UPDATE query: ' + _query.query);
                     }
                     // Run query
-                    connection.execute(_query.query, [], function(err, result) {
+                    execQuery(connections[connectionName],_query.query, [], function(err, result) {
                         if (err) {
-                            console.log('#Error executing Update ' + err.toString() + '.');
+                            if (LOG_ERRORS) {
+                                console.log('#Error executing Update ' + err.toString() + '.');
+                            }
                             return cb(handleQueryError(err));
                         }
                         
@@ -827,9 +775,11 @@ module.exports = (function() {
                         if (LOG_QUERIES) {
                             console.log("Executing UPDATE find query" + findQuery);
                         }
-                        connection.execute(findQuery, [], function(err, result) {
+                        execQuery(connections[connectionName],findQuery, [], function(err, result) {
                             if (err) {
-                                console.log("#Error executing Find_2 (Update) " + err.toString() + ".");
+                                if (LOG_ERRORS) {
+                                    console.log("#Error executing Find_2 (Update) " + err.toString() + ".");
+                                }
                                 return cb(err);
                             }
 
@@ -839,20 +789,9 @@ module.exports = (function() {
                     });
 
                 });
-            }
         },
         // REQUIRED method if users expect to call Model.destroy()
         destroy: function(connectionName, collectionName, options, cb, connection) {
-
-
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__DESTROY__, connections[connectionName], cb);
-            } else {
-                __DESTROY__(connection, cb);
-            }
-
-            function __DESTROY__(connection, cb) {
-
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
                 var tableName = collectionName;
@@ -872,9 +811,8 @@ module.exports = (function() {
                     console.log("Executing DESTROY query: " + _query.query);
                 }
                 asynk.add((adapter.find).bind(adapter)).args(connectionName, collectionName, options, asynk.callback, connection).alias('findRecords')
-                        .add((connection.execute).bind(connection)).args(_query.query, [], asynk.callback)
+                        .add(execQuery).args(connections[connectionName],_query.query, [], asynk.callback)
                         .serie(cb,[null,asynk.data('findRecords')]);
-            }
         },
         // REQUIRED method if users expect to call Model.stream()
         stream: function(connectionName, collectionName, options, stream, connection) {
@@ -922,14 +860,6 @@ module.exports = (function() {
             }
         },
         addAttribute: function(connectionName, collectionName, attrName, attrDef, cb, connection) {
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__ADD_ATTRIBUTE__, connections[connectionName], cb);
-            } else {
-                __ADD_ATTRIBUTE__(connection, cb);
-            }
-
-            function __ADD_ATTRIBUTE__(connection, cb) {
-
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
                 var tableName = collectionName;
@@ -942,26 +872,18 @@ module.exports = (function() {
                 }
 
                 // Run query
-                connection.query(query, function(err, result) {
+                execQuery(connections[connectionName],query, function(err, result) {
                     if (err)
+                        if (LOG_ERRORS) {
+                            console.log('ADD_ATTRIBUTE error: ', err);
+                        }
                         return cb(err);
 
                     // TODO: marshal response to waterline interface
                     cb(err);
                 });
-
-            }
         },
         removeAttribute: function(connectionName, collectionName, attrName, cb, connection) {
-            if (_.isUndefined(connection)) {
-                //LOOK LIKE MALFORMED
-                return spawnConnection(connectionName, __REMOVE_ATTRIBUTE__, cb);
-            } else {
-                __REMOVE_ATTRIBUTE__(connection, cb);
-            }
-
-            function __REMOVE_ATTRIBUTE__(connection, cb) {
-
                 var connectionObject = connections[connectionName];
                 var collection = connectionObject.collections[collectionName];
                 var tableName = collectionName;
@@ -972,25 +894,18 @@ module.exports = (function() {
                 if (LOG_QUERIES) {
                     console.log('Executing REMOVE_ATTRIBUTE query: ', query);
                 }
-                connection.query(query, function(err, result) {
+                execQuery(connections[connectionName],query, function(err, result) {
                     if (err)
+                        if (LOG_ERRORS) {
+                            console.log('REMOVE_ATTRIBUTE error: ', err);
+                        }
                         return cb(err);
 
                     // TODO: marshal response to waterline interface
                     cb(err);
                 });
-
-            }
         },
         count: function(connectionName, collectionName, options, cb, connection) {
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__COUNT__, connections[connectionName], cb);
-            } else {
-                __COUNT__(connection, cb);
-            }
-
-            function __COUNT__(connection, cb) {
-
                 // Check if this is an aggregate query and that there is something to return
                 if (options.groupBy || options.sum || options.average || options.min || options.max) {
                     if (!options.sum && !options.average && !options.min && !options.max) {
@@ -1015,25 +930,18 @@ module.exports = (function() {
                 if (LOG_QUERIES) {
                     console.log('Executing COUNT query:',query);
                 }
-                connection.execute(query, [], function(err, result) {
+                execQuery(connections[connectionName],query, [], function(err, result) {
                     if (err) {
-                        console.log('#Error counting table \'' + collectionName + '\' rows (Count) ' + err.toString() + '.');
+                        if (LOG_ERRORS) {
+                            console.log('#Error counting table \'' + collectionName + '\' rows (Count) ' + err.toString() + '.');
+                        }
                         return cb(err);
                     }
                     // Return the count from the simplified query
                     cb(null, result[0].COUNT);
                 });
-            }
         },
         join: function(connectionName, collectionName, options, cb, connection) {
-            if (_.isUndefined(connection)) {
-                return spawnConnection(__JOIN__, connections[connectionName], cb);
-            } else {
-                __JOIN__(connection, cb);
-            }
-
-            function __JOIN__(client, done) {
-
                 // Populate associated records for each parent result
                 // (or do them all at once as an optimization, if possible)
                 Cursor({
@@ -1048,7 +956,7 @@ module.exports = (function() {
                      * @param  {Function} _cb
                      */
                     $find: function(collectionName, criteria, _cb) {
-                        return adapter.find(connectionName, collectionName, criteria, _cb, client);
+                        return adapter.find(connectionName, collectionName, criteria, _cb);
                     },
                     /**
                      * Look up the name of the primary key field
@@ -1127,7 +1035,9 @@ module.exports = (function() {
                         asynk.add(function(next) {
                                 adapter.find(connectionName, collectionName, instructions, function __FIND__(err, result) {
                                     if (err) {
-                                        console.log('#Error fetching parent \'' + collectionName + '\' rows (Join) ' + err.toString() + '.');
+                                        if (LOG_ERRORS) {
+                                            console.log('#Error fetching parent \'' + collectionName + '\' rows (Join) ' + err.toString() + '.');
+                                        }
                                         return next(err);
                                     }
                                     var attrs = collection.attributes;
@@ -1160,14 +1070,14 @@ module.exports = (function() {
                                     };
 
                                     // Pull out any aliased child records that have come from a hasFK association
-                                    asynk.each(parentRecords, splitChildren).args(asynk.item,asynk.callback).serie(function(err) {
+                                    asynk.each(parentRecords, splitChildren).args(asynk.item,asynk.callback).parallel(function(err) {
                                         if (err)
                                             return next(err);
                                         buffers.parents = parentRecords;
                                         next();
                                     },[null]);
 
-                                },client);
+                                });
                             }).args(asynk.callback)
                             // Build child buffers.
                             // For each instruction, loop through the parent records and build up a
@@ -1178,7 +1088,7 @@ module.exports = (function() {
                                         var popInstructions = populationObject.instructions;
                                         var pk = _getPK(connectionName, popInstructions[0].parent);
                                         var alias = populationObject.strategy.strategy === 1 ? popInstructions[0].parentKey : popInstructions[0].alias;
-                                        // Use eachSeries here to keep ordering
+                                        // Use serie here to keep ordering
                                         asynk.each(parentRecords,function(parent, nextParent) {
                                             var buffer = {
                                                 attrName: population,
@@ -1283,9 +1193,11 @@ module.exports = (function() {
                                         // Remove the last UNION
                                         qs = qs.slice(0, -7);
                                         
-                                        client.execute(qs, [], function __FIND__(err, result) {
+                                        execQuery(connections[connectionName],qs, [], function __FIND__(err, result) {
                                             if (err) {
-                                                console.log("#Error populating '" + childCollection + "' collection in '" + collectionName + "' (Join) " + err.toString() + ".");
+                                                if (LOG_ERRORS) {
+                                                    console.log("#Error populating '" + childCollection + "' collection in '" + collectionName + "' (Join) " + err.toString() + ".");
+                                                }
                                                 return next(err);
                                             }
                                             var groupedRecords = {};
@@ -1338,13 +1250,12 @@ module.exports = (function() {
                                     }).args(asynk.item,asynk.callback)
                                     .parallel(function(err) {
                                         next();
-                                    },[null]);
+                                    });
 
-                                }).args(asynk.callback).serie(next,[null]);
+                                }).args(asynk.callback).serie(next);
                     }
 
-                }, done);
-            }
+                }, cb);
         }
         /*
          **********************************************
@@ -1492,10 +1403,21 @@ module.exports = (function() {
             logic(cnx, function(err, result) {
                 if (err) {
                     cb(err, 1);
-                    console.log("Logic error in Oracle ORM.");
-                    console.log(err);
+                    if (LOG_ERRORS) {
+                        console.log("Logic error in Oracle ORM.",err);
+                    }
                     return pool.release(cnx);
                 }
+                pool.release(cnx);
+                cb(err, result);
+            });
+        });
+    }
+
+    function execQuery(connection,query,data,cb){
+        var pool = connection.connection;
+        pool.acquire(function(err, cnx) {
+            cnx.execute(query, data, function(err, result) {
                 pool.release(cnx);
                 cb(err, result);
             });
