@@ -13,7 +13,7 @@ var SqlString = require('./lib/SqlString');
 var Errors = require('waterline-errors').adapter;
 var Pool = require('generic-pool');
 
-var LOG_QUERIES = true;
+var LOG_QUERIES = false;
 var LOG_ERRORS = false;
 
 module.exports = (function() {
