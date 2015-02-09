@@ -13,7 +13,7 @@ var SqlString = require('./lib/SqlString');
 var Errors = require('waterline-errors').adapter;
 var Pool = require('generic-pool');
 
-var LOG_QUERIES = false;
+var LOG_QUERIES = true;
 var LOG_ERRORS = false;
 
 module.exports = (function() {
@@ -83,40 +83,6 @@ module.exports = (function() {
             migrate: 'safe'
         },
         config: {
-        },
-        // This method runs when a model is initially registered at server start time
-        registerCollection: function(collection, cb) {
-
-            var def = _.clone(collection);
-            var key = def.identity;
-            var definition = def.definition || {};
-
-            // Set a default Primary Key
-            var pkName = 'id';
-
-            // Set the Primary Key Field
-            for (var attribute in definition) {
-                if (!definition[attribute].hasOwnProperty('primaryKey'))
-                    continue;
-
-                // Check if custom primaryKey value is falsy
-                if (!definition[attribute].primaryKey)
-                    continue;
-
-                // Set the pkName to the custom primaryKey value
-                pkName = attribute;
-            }
-            // Set the primaryKey on the definition object
-            def.primaryKey = pkName;
-
-
-            // Store the definition for the model identity
-            if (dbs[key])
-                return cb();
-            dbs[key.toString()] = def;
-
-
-            return cb();
         },
         //added to match waterline orm
         registerConnection: function(connection, collections, cb) {
@@ -592,7 +558,7 @@ module.exports = (function() {
                      cb(null, results);
                      });*/
                     cb(null, null);
-                }[null]);
+                },[null]);
         },
         // REQUIRED method if users expect to call Model.find(), Model.findAll() or related methods
         // You're actually supporting find(), findAll(), and other methods here
